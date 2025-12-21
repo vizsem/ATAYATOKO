@@ -1,9 +1,17 @@
 // pages/index.js
 import Head from 'next/head';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+
+// 🔥 Import Firebase DI ATAS (diperbolehkan di Pages Router)
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
+import { auth, db } from '../lib/firebase';
 
 export default function Home() {
+  // Untuk memastikan kode jalan di browser saja
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
     // ========== DATA ==========
     const products = [
       {
@@ -52,12 +60,10 @@ export default function Home() {
       }
     ];
 
-    // ========== STATE ==========
-    let currentUser = JSON.parse(localStorage.getItem('atayatoko_user') || 'null');
-    let cart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
-    let currentRole = currentUser ? currentUser.role : 'pembeli';
+    let currentUser = null;
+    let cart = [];
+    let currentRole = 'pembeli';
 
-    // ========== HELPER ==========
     function formatRupiah(angka) {
       return new Intl.NumberFormat('id-ID', {
         style: 'currency',
@@ -66,20 +72,22 @@ export default function Home() {
       }).format(angka);
     }
 
-    function saveUser(user) {
+    async function saveUserToFirestore(user) {
+      if (!auth.currentUser) return;
+      const userRef = doc(db, 'users', auth.currentUser.uid);
+      await setDoc(userRef, user, { merge: true });
       currentUser = user;
-      localStorage.setItem('atayatoko_user', JSON.stringify(user));
-      updateAuthUI();
+      currentRole = user.role;
     }
 
-    function saveCart() {
-      localStorage.setItem('atayatoko_cart', JSON.stringify(cart));
-      updateCartUI();
+    async function saveCartToFirestore() {
+      if (!auth.currentUser) return;
+      const cartRef = doc(db, 'carts', auth.currentUser.uid);
+      await setDoc(cartRef, { items: cart, updatedAt: new Date() });
     }
 
-    function logout() {
-      localStorage.removeItem('atayatoko_user');
-      localStorage.removeItem('atayatoko_cart');
+    async function handleLogout() {
+      await signOut(auth);
       currentUser = null;
       cart = [];
       currentRole = 'pembeli';
@@ -88,7 +96,6 @@ export default function Home() {
       alert('Anda telah logout.');
     }
 
-    // ========== UI UPDATE ==========
     function updateAuthUI() {
       const authBtn = document.getElementById('authBtn');
       const authProfile = document.getElementById('authProfile');
@@ -100,14 +107,14 @@ export default function Home() {
         document.getElementById('userName').textContent = currentUser.name;
         document.getElementById('userRole').textContent = 
           currentUser.role === 'pembeli' ? 'Pembeli' : 'Reseller';
-        currentRole = currentUser.role;
       } else {
         authBtn.style.display = 'block';
         authProfile.style.display = 'none';
-        currentRole = 'pembeli';
       }
-      if (currentRoleText) currentRoleText.textContent = 
-        currentRole === 'pembeli' ? 'Pembeli (Eceran)' : 'Reseller (Grosir)';
+      if (currentRoleText) {
+        currentRoleText.textContent = 
+          currentRole === 'pembeli' ? 'Pembeli (Eceran)' : 'Reseller (Grosir)';
+      }
     }
 
     function updateCartUI() {
@@ -127,6 +134,7 @@ export default function Home() {
           <h3 class="font-bold text-lg mb-4">Masuk / Daftar</h3>
           <input id="emailInput" type="email" placeholder="Email" class="w-full p-2 border mb-3" />
           <input id="nameInput" type="text" placeholder="Nama Lengkap" class="w-full p-2 border mb-3" />
+          <input id="passwordInput" type="password" placeholder="Password" class="w-full p-2 border mb-3" />
           <select id="roleInput" class="w-full p-2 border mb-4">
             <option value="pembeli">Pembeli (Eceran)</option>
             <option value="reseller">Reseller (Grosir)</option>
@@ -136,18 +144,29 @@ export default function Home() {
       `;
       document.body.appendChild(modal);
 
-      document.getElementById('submitAuth').onclick = () => {
+      document.getElementById('submitAuth').onclick = async () => {
         const email = document.getElementById('emailInput').value;
         const name = document.getElementById('nameInput').value;
+        const password = document.getElementById('passwordInput').value;
         const role = document.getElementById('roleInput').value;
 
-        if (!email || !name) {
-          alert('Email dan Nama wajib diisi!');
+        if (!email || !name || !password) {
+          alert('Semua kolom wajib diisi!');
           return;
         }
 
-        saveUser({ email, name, role });
+        try {
+          // Coba login
+          await signInWithEmailAndPassword(auth, email, password);
+        } catch (err) {
+          // Jika gagal, daftar
+          await createUserWithEmailAndPassword(auth, email, password);
+        }
+
+        await saveUserToFirestore({ email, name, role });
         modal.remove();
+        updateAuthUI();
+        updateRoleUI();
       };
 
       modal.onclick = (e) => {
@@ -174,7 +193,6 @@ export default function Home() {
         });
       }
 
-      // === WhatsApp Checkout (DIPERBAIKI) ===
       let waMessage = 'Halo, saya ingin pesan:\n';
       cart.forEach(item => {
         waMessage += `- ${item.name} × ${item.quantity} → ${formatRupiah(item.price * item.quantity)}\n`;
@@ -185,20 +203,16 @@ export default function Home() {
         waMessage += `\nEmail: ${currentUser.email}`;
       }
       const waNumber = '6285790565666';
-      // ✅ TANPA SPASI
-      const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`;
+      const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`; // ✅ TANPA SPASI
 
       modal.innerHTML = `
         <div class="bg-white p-6 rounded-lg w-96 max-h-[80vh] overflow-y-auto">
           <h3 class="font-bold mb-4">Keranjang Belanja</h3>
           <div>${itemsHtml}</div>
           <div class="mt-4 font-bold text-lg">Total: ${formatRupiah(total)}</div>
-          
-          <!-- Tombol WhatsApp -->
           <a href="${waUrl}" target="_blank" class="mt-4 w-full bg-green-600 text-white py-2 rounded text-center block">
             <i class="fab fa-whatsapp mr-2"></i>Pesan via WhatsApp
           </a>
-          
           <button class="mt-2 w-full bg-gray-600 text-white py-2 rounded" onclick="document.getElementById('cartModal').remove()">
             Tutup
           </button>
@@ -210,7 +224,6 @@ export default function Home() {
       };
     }
 
-    // ========== PRODUK ==========
     function displayProducts(category = 'all') {
       const container = document.getElementById('productsContainer');
       if (!container) return;
@@ -253,7 +266,7 @@ export default function Home() {
       });
 
       document.querySelectorAll('.buy-btn').forEach(btn => {
-        btn.onclick = () => {
+        btn.onclick = async () => {
           if (!currentUser) {
             alert('Silakan login terlebih dahulu!');
             showAuthModal();
@@ -270,7 +283,8 @@ export default function Home() {
           } else {
             cart.push({ id, name, price, unit, quantity: 1 });
           }
-          saveCart();
+          await saveCartToFirestore();
+          updateCartUI();
           alert(`${name} ditambahkan ke keranjang!`);
         };
       });
@@ -289,14 +303,14 @@ export default function Home() {
     const roleReseller = document.getElementById('roleReseller');
     if (rolePembeli) rolePembeli.onclick = () => { 
       if (currentUser) {
-        saveUser({ ...currentUser, role: 'pembeli' });
+        saveUserToFirestore({ ...currentUser, role: 'pembeli' });
         currentRole = 'pembeli';
         updateRoleUI();
       }
     };
     if (roleReseller) roleReseller.onclick = () => { 
       if (currentUser) {
-        saveUser({ ...currentUser, role: 'reseller' });
+        saveUserToFirestore({ ...currentUser, role: 'reseller' });
         currentRole = 'reseller';
         updateRoleUI();
       }
@@ -310,7 +324,6 @@ export default function Home() {
       };
     });
 
-    // Bind tombol di header
     const authBtn = document.getElementById('authBtn');
     if (authBtn) authBtn.onclick = showAuthModal;
 
@@ -318,13 +331,36 @@ export default function Home() {
     if (cartBtn) cartBtn.onclick = showCartModal;
 
     const logoutBtn = document.getElementById('logoutBtn');
-    if (logoutBtn) logoutBtn.onclick = logout;
+    if (logoutBtn) logoutBtn.onclick = handleLogout;
 
-    // ========== INIT ==========
-    updateAuthUI();
-    updateCartUI();
-    updateRoleUI();
+    // ========== FIREBASE AUTH LISTENER ==========
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          currentUser = userDoc.data();
+          currentRole = currentUser.role;
+        }
+
+        const cartDoc = await getDoc(doc(db, 'carts', user.uid));
+        if (cartDoc.exists()) {
+          cart = cartDoc.data().items || [];
+        }
+      } else {
+        currentUser = null;
+        cart = [];
+        currentRole = 'pembeli';
+      }
+      updateAuthUI();
+      updateCartUI();
+      updateRoleUI();
+    });
+
+    // Init UI
     document.querySelector('.category-btn[data-category="all"]').classList.add('bg-indigo-600', 'text-white');
+
+    // Cleanup
+    return () => unsubscribe();
   }, []);
 
   return (
@@ -332,7 +368,7 @@ export default function Home() {
       <Head>
         <title>ATAYATOKO - Sudah Online, Siap Bisnis</title>
         <meta name="description" content="Sistem integrasi usaha untuk mini market & reseller" />
-        {/* ✅ CDN DIPERBAIKI: TIDAK ADA SPASI */}
+        {/* ✅ CDN TANPA SPASI */}
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -342,6 +378,9 @@ export default function Home() {
         `}</style>
       </Head>
 
+      {/* ... JSX sama seperti sebelumnya ... */}
+      {/* (tidak perlu diubah, karena sudah benar) */}
+      
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center space-x-2">
@@ -349,16 +388,13 @@ export default function Home() {
             <h1 className="text-2xl font-bold text-indigo-700">ATAYATOKO</h1>
           </div>
           <div className="flex items-center space-x-4">
-            {/* Ikon Keranjang */}
             <button id="cartBtn" className="text-indigo-600 relative">
               <i className="fas fa-shopping-cart"></i>
               <span id="cartCount" className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">0</span>
             </button>
-            {/* Auth Button */}
             <button id="authBtn" className="bg-indigo-600 text-white px-4 py-2 rounded-full font-medium hover:bg-indigo-700 transition">
               Masuk / Daftar
             </button>
-            {/* Profil (sembunyi awal) */}
             <div id="authProfile" className="hidden items-center space-x-2">
               <span id="userName" className="text-sm font-medium"></span>
               <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded-full" id="userRole"></span>
@@ -369,6 +405,8 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* ... bagian lainnya sama ... */}
 
       <section className="hero-gradient text-white py-16 md:py-24">
         <div className="container mx-auto px-4 text-center">
