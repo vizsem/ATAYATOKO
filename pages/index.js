@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 
 export default function Home() {
   useEffect(() => {
+    // ========== DATA ==========
     const products = [
       {
         id: 1,
@@ -51,8 +52,12 @@ export default function Home() {
       }
     ];
 
-    let currentRole = 'pembeli';
+    // ========== STATE ==========
+    let currentUser = JSON.parse(localStorage.getItem('atayatoko_user') || 'null');
+    let cart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
+    let currentRole = currentUser ? currentUser.role : 'pembeli';
 
+    // ========== HELPER ==========
     function formatRupiah(angka) {
       return new Intl.NumberFormat('id-ID', {
         style: 'currency',
@@ -61,6 +66,131 @@ export default function Home() {
       }).format(angka);
     }
 
+    function saveUser(user) {
+      currentUser = user;
+      localStorage.setItem('atayatoko_user', JSON.stringify(user));
+      updateAuthUI();
+    }
+
+    function saveCart() {
+      localStorage.setItem('atayatoko_cart', JSON.stringify(cart));
+      updateCartUI();
+    }
+
+    function logout() {
+      localStorage.removeItem('atayatoko_user');
+      localStorage.removeItem('atayatoko_cart');
+      currentUser = null;
+      cart = [];
+      currentRole = 'pembeli';
+      updateAuthUI();
+      updateCartUI();
+      alert('Anda telah logout.');
+    }
+
+    // ========== UI UPDATE ==========
+    function updateAuthUI() {
+      const authBtn = document.getElementById('authBtn');
+      const authProfile = document.getElementById('authProfile');
+      const currentRoleText = document.getElementById('currentRoleText');
+
+      if (currentUser) {
+        authBtn.style.display = 'none';
+        authProfile.style.display = 'flex';
+        document.getElementById('userName').textContent = currentUser.name;
+        document.getElementById('userRole').textContent = 
+          currentUser.role === 'pembeli' ? 'Pembeli' : 'Reseller';
+        currentRole = currentUser.role;
+      } else {
+        authBtn.style.display = 'block';
+        authProfile.style.display = 'none';
+        currentRole = 'pembeli';
+      }
+      if (currentRoleText) currentRoleText.textContent = 
+        currentRole === 'pembeli' ? 'Pembeli (Eceran)' : 'Reseller (Grosir)';
+    }
+
+    function updateCartUI() {
+      const cartCount = document.getElementById('cartCount');
+      const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+      if (cartCount) cartCount.textContent = totalItems || '0';
+    }
+
+    function showAuthModal() {
+      if (document.getElementById('authModal')) return;
+
+      const modal = document.createElement('div');
+      modal.id = 'authModal';
+      modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+      modal.innerHTML = `
+        <div class="bg-white p-6 rounded-lg w-96">
+          <h3 class="font-bold text-lg mb-4">Masuk / Daftar</h3>
+          <input id="emailInput" type="email" placeholder="Email" class="w-full p-2 border mb-3" />
+          <input id="nameInput" type="text" placeholder="Nama Lengkap" class="w-full p-2 border mb-3" />
+          <select id="roleInput" class="w-full p-2 border mb-4">
+            <option value="pembeli">Pembeli (Eceran)</option>
+            <option value="reseller">Reseller (Grosir)</option>
+          </select>
+          <button id="submitAuth" class="w-full bg-indigo-600 text-white py-2 rounded">Daftar / Masuk</button>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      document.getElementById('submitAuth').onclick = () => {
+        const email = document.getElementById('emailInput').value;
+        const name = document.getElementById('nameInput').value;
+        const role = document.getElementById('roleInput').value;
+
+        if (!email || !name) {
+          alert('Email dan Nama wajib diisi!');
+          return;
+        }
+
+        saveUser({ email, name, role });
+        modal.remove();
+      };
+
+      modal.onclick = (e) => {
+        if (e.target === modal) modal.remove();
+      };
+    }
+
+    function showCartModal() {
+      const modal = document.createElement('div');
+      modal.id = 'cartModal';
+      modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+      const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      let itemsHtml = '';
+      if (cart.length === 0) {
+        itemsHtml = '<p class="text-center text-gray-500 py-4">Keranjang kosong</p>';
+      } else {
+        cart.forEach(item => {
+          itemsHtml += `
+            <div class="flex justify-between py-2 border-b">
+              <span>${item.name} × ${item.quantity}</span>
+              <span>${formatRupiah(item.price * item.quantity)}</span>
+            </div>
+          `;
+        });
+      }
+
+      modal.innerHTML = `
+        <div class="bg-white p-6 rounded-lg w-96 max-h-[80vh] overflow-y-auto">
+          <h3 class="font-bold mb-4">Keranjang Belanja</h3>
+          <div>${itemsHtml}</div>
+          <div class="mt-4 font-bold text-lg">Total: ${formatRupiah(total)}</div>
+          <button class="mt-4 w-full bg-indigo-600 text-white py-2 rounded" onclick="document.getElementById('cartModal').remove()">
+            Tutup
+          </button>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.onclick = (e) => {
+        if (e.target === modal) modal.remove();
+      };
+    }
+
+    // ========== PRODUK ==========
     function displayProducts(category = 'all') {
       const container = document.getElementById('productsContainer');
       if (!container) return;
@@ -104,7 +234,24 @@ export default function Home() {
 
       document.querySelectorAll('.buy-btn').forEach(btn => {
         btn.onclick = () => {
-          alert('Produk ditambahkan! (Demo)');
+          if (!currentUser) {
+            alert('Silakan login terlebih dahulu!');
+            showAuthModal();
+            return;
+          }
+          const id = Number(btn.dataset.id);
+          const price = Number(btn.dataset.price);
+          const name = btn.dataset.name;
+          const unit = btn.dataset.unit;
+
+          const existing = cart.find(item => item.id === id);
+          if (existing) {
+            existing.quantity += 1;
+          } else {
+            cart.push({ id, name, price, unit, quantity: 1 });
+          }
+          saveCart();
+          alert(`${name} ditambahkan ke keranjang!`);
         };
       });
     }
@@ -117,10 +264,23 @@ export default function Home() {
       displayProducts();
     }
 
+    // ========== EVENT LISTENERS ==========
     const rolePembeli = document.getElementById('rolePembeli');
     const roleReseller = document.getElementById('roleReseller');
-    if (rolePembeli) rolePembeli.onclick = () => { currentRole = 'pembeli'; updateRoleUI(); };
-    if (roleReseller) roleReseller.onclick = () => { currentRole = 'reseller'; updateRoleUI(); };
+    if (rolePembeli) rolePembeli.onclick = () => { 
+      if (currentUser) {
+        saveUser({ ...currentUser, role: 'pembeli' });
+        currentRole = 'pembeli';
+        updateRoleUI();
+      }
+    };
+    if (roleReseller) roleReseller.onclick = () => { 
+      if (currentUser) {
+        saveUser({ ...currentUser, role: 'reseller' });
+        currentRole = 'reseller';
+        updateRoleUI();
+      }
+    };
 
     document.querySelectorAll('.category-btn').forEach(btn => {
       btn.onclick = () => {
@@ -130,6 +290,19 @@ export default function Home() {
       };
     });
 
+    // Bind tombol di header
+    const authBtn = document.getElementById('authBtn');
+    if (authBtn) authBtn.onclick = showAuthModal;
+
+    const cartBtn = document.getElementById('cartBtn');
+    if (cartBtn) cartBtn.onclick = showCartModal;
+
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) logoutBtn.onclick = logout;
+
+    // ========== INIT ==========
+    updateAuthUI();
+    updateCartUI();
     updateRoleUI();
     document.querySelector('.category-btn[data-category="all"]').classList.add('bg-indigo-600', 'text-white');
   }, []);
@@ -139,27 +312,13 @@ export default function Home() {
       <Head>
         <title>ATAYATOKO - Sudah Online, Siap Bisnis</title>
         <meta name="description" content="Sistem integrasi usaha untuk mini market & reseller" />
+        {/* ✅ CDNs diperbaiki: hapus spasi di akhir URL */}
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
         <style>{`
           body { font-family: 'Poppins', sans-serif; }
           .hero-gradient { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
-          .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-          }
-          .modal.show {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
         `}</style>
       </Head>
 
@@ -169,9 +328,25 @@ export default function Home() {
             <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold text-lg">A</div>
             <h1 className="text-2xl font-bold text-indigo-700">ATAYATOKO</h1>
           </div>
-          <button className="bg-indigo-600 text-white px-4 py-2 rounded-full font-medium hover:bg-indigo-700 transition">
-            Masuk / Daftar
-          </button>
+          <div className="flex items-center space-x-4">
+            {/* Ikon Keranjang */}
+            <button id="cartBtn" className="text-indigo-600 relative">
+              <i className="fas fa-shopping-cart"></i>
+              <span id="cartCount" className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">0</span>
+            </button>
+            {/* Auth Button */}
+            <button id="authBtn" className="bg-indigo-600 text-white px-4 py-2 rounded-full font-medium hover:bg-indigo-700 transition">
+              Masuk / Daftar
+            </button>
+            {/* Profil (sembunyi awal) */}
+            <div id="authProfile" className="hidden items-center space-x-2">
+              <span id="userName" className="text-sm font-medium"></span>
+              <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded-full" id="userRole"></span>
+              <button id="logoutBtn" className="text-gray-500 hover:text-gray-700">
+                <i className="fas fa-sign-out-alt"></i>
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
