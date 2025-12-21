@@ -1,6 +1,7 @@
 // pages/admin.js
 import { useState, useEffect } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router'; // ✅ untuk redirect yang andal
 import { auth, db } from '../lib/firebase';
 import {
   collection,
@@ -14,6 +15,7 @@ import {
 } from 'firebase/firestore';
 
 export default function Admin() {
+  const router = useRouter();
   const [user, setUser] = useState(null);
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
@@ -33,10 +35,10 @@ export default function Admin() {
           loadProducts();
         } else {
           alert('Akses ditolak! Hanya admin yang boleh masuk.');
-          window.location.href = '/';
+          router.push('/'); // ✅ redirect aman di Next.js
         }
       } else {
-        window.location.href = '/';
+        router.push('/'); // ✅ redirect aman
       }
     });
     return () => unsubscribe();
@@ -155,6 +157,7 @@ export default function Admin() {
     <>
       <Head>
         <title>ATAYATOKO - Admin Panel</title>
+        {/* ✅ CDN SheetJS AMAN dan TANPA SPASI */}
         <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
       </Head>
 
@@ -163,7 +166,7 @@ export default function Admin() {
           <div className="container mx-auto flex justify-between items-center">
             <h1 className="text-2xl font-bold">Admin Panel</h1>
             <button
-              onClick={() => auth.signOut()}
+              onClick={() => auth.signOut().then(() => router.push('/'))}
               className="bg-white text-indigo-700 px-4 py-2 rounded font-medium"
             >
               Logout
