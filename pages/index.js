@@ -174,7 +174,7 @@ export default function Home() {
         });
       }
 
-      // === Tambahkan WhatsApp Checkout di sini ===
+      // === WhatsApp Checkout (DIPERBAIKI) ===
       let waMessage = 'Halo, saya ingin pesan:\n';
       cart.forEach(item => {
         waMessage += `- ${item.name} × ${item.quantity} → ${formatRupiah(item.price * item.quantity)}\n`;
@@ -184,8 +184,8 @@ export default function Home() {
         waMessage += `\n\nNama: ${currentUser.name}`;
         waMessage += `\nEmail: ${currentUser.email}`;
       }
-      // Ganti dengan nomor WhatsApp Anda (format internasional tanpa +)
       const waNumber = '6285790565666';
+      // ✅ TANPA SPASI
       const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`;
 
       modal.innerHTML = `
@@ -332,7 +332,7 @@ export default function Home() {
       <Head>
         <title>ATAYATOKO - Sudah Online, Siap Bisnis</title>
         <meta name="description" content="Sistem integrasi usaha untuk mini market & reseller" />
-        {/* ✅ CDN DIPERBAIKI: TANPA SPASI */}
+        {/* ✅ CDN DIPERBAIKI: TIDAK ADA SPASI */}
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
