@@ -58,7 +58,6 @@ export default function Home() {
 
     let currentUser = null;
     let cart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
-    let currentRole = 'pembeli';
 
     function formatRupiah(angka) {
       return new Intl.NumberFormat('id-ID', {
@@ -73,7 +72,6 @@ export default function Home() {
       const userRef = doc(db, 'users', auth.currentUser.uid);
       await setDoc(userRef, user, { merge: true });
       currentUser = user;
-      currentRole = user.role;
     }
 
     async function saveCartToFirestore() {
@@ -86,17 +84,18 @@ export default function Home() {
       await signOut(auth);
       currentUser = null;
       cart = [];
-      currentRole = 'pembeli';
       localStorage.removeItem('atayatoko_cart');
       updateAuthUI();
       updateCartUI();
-      alert('Anda telah logout.');
+      // Reset UI role ke default
+      document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('bg-indigo-600', 'text-white'));
+      document.getElementById('rolePembeli').classList.add('bg-indigo-600', 'text-white');
+      displayProducts();
     }
 
     function updateAuthUI() {
       const authBtn = document.getElementById('authBtn');
       const authProfile = document.getElementById('authProfile');
-      const currentRoleText = document.getElementById('currentRoleText');
 
       if (currentUser) {
         authBtn.style.display = 'none';
@@ -104,14 +103,18 @@ export default function Home() {
         document.getElementById('userEmail').textContent = currentUser.email;
         document.getElementById('userRole').textContent = 
           currentUser.role === 'pembeli' ? 'Pembeli' : 'Reseller';
+        // Set role UI sesuai user
+        document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('bg-indigo-600', 'text-white'));
+        const roleBtn = currentUser.role === 'pembeli' ? 'rolePembeli' : 'roleReseller';
+        document.getElementById(roleBtn).classList.add('bg-indigo-600', 'text-white');
       } else {
         authBtn.style.display = 'block';
         authProfile.style.display = 'none';
+        // Reset ke role default untuk tamu
+        document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('bg-indigo-600', 'text-white'));
+        document.getElementById('rolePembeli').classList.add('bg-indigo-600', 'text-white');
       }
-      if (currentRoleText) {
-        currentRoleText.textContent = 
-          currentRole === 'pembeli' ? 'Pembeli (Eceran)' : 'Reseller (Grosir)';
-      }
+      displayProducts();
     }
 
     function updateCartUI() {
@@ -159,7 +162,7 @@ export default function Home() {
         await saveUserToFirestore({ email, role });
         modal.remove();
         updateAuthUI();
-        updateRoleUI();
+        updateCartUI();
 
         // Pindahkan keranjang lokal ke Firebase
         const localCart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
@@ -229,6 +232,10 @@ export default function Home() {
       const container = document.getElementById('productsContainer');
       if (!container) return;
 
+      // Ambil role dari UI, bukan dari currentUser (untuk dukung tamu)
+      const rolePembeliActive = document.getElementById('rolePembeli')?.classList.contains('bg-indigo-600');
+      const currentRole = rolePembeliActive ? 'pembeli' : 'reseller';
+
       const filtered = category === 'all'
         ? products
         : products.filter(p => p.category === category);
@@ -287,31 +294,16 @@ export default function Home() {
       });
     }
 
-    function updateRoleUI() {
-      const el = document.getElementById('currentRoleText');
-      if (el) {
-        el.textContent = currentRole === 'pembeli' ? 'Pembeli (Eceran)' : 'Reseller (Grosir)';
-      }
-      displayProducts();
-    }
+    // Setup role buttons
+    document.querySelectorAll('.role-btn').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('bg-indigo-600', 'text-white'));
+        btn.classList.add('bg-indigo-600', 'text-white');
+        displayProducts();
+      };
+    });
 
-    const rolePembeli = document.getElementById('rolePembeli');
-    const roleReseller = document.getElementById('roleReseller');
-    if (rolePembeli) rolePembeli.onclick = () => { 
-      if (currentUser) {
-        saveUserToFirestore({ ...currentUser, role: 'pembeli' });
-        currentRole = 'pembeli';
-        updateRoleUI();
-      }
-    };
-    if (roleReseller) roleReseller.onclick = () => { 
-      if (currentUser) {
-        saveUserToFirestore({ ...currentUser, role: 'reseller' });
-        currentRole = 'reseller';
-        updateRoleUI();
-      }
-    };
-
+    // Setup category buttons
     document.querySelectorAll('.category-btn').forEach(btn => {
       btn.onclick = () => {
         document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('bg-indigo-600', 'text-white'));
@@ -334,9 +326,7 @@ export default function Home() {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         if (userDoc.exists()) {
           currentUser = userDoc.data();
-          currentRole = currentUser.role;
         }
-
         const cartDoc = await getDoc(doc(db, 'carts', user.uid));
         if (cartDoc.exists()) {
           cart = cartDoc.data().items || [];
@@ -344,14 +334,15 @@ export default function Home() {
       } else {
         currentUser = null;
         cart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
-        currentRole = 'pembeli';
       }
       updateAuthUI();
       updateCartUI();
-      updateRoleUI();
     });
 
+    // Inisialisasi UI default
     document.querySelector('.category-btn[data-category="all"]').classList.add('bg-indigo-600', 'text-white');
+    document.getElementById('rolePembeli').classList.add('bg-indigo-600', 'text-white');
+    displayProducts();
 
     return () => unsubscribe();
   }, []);
@@ -410,10 +401,10 @@ export default function Home() {
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-2xl font-bold mb-6">Pilih Role Anda</h2>
           <div className="flex flex-wrap justify-center gap-4">
-            <button id="rolePembeli" className="px-6 py-3 bg-white rounded-lg border border-indigo-200 hover:bg-indigo-50 transition font-medium">
+            <button id="rolePembeli" className="role-btn px-6 py-3 bg-white rounded-lg border border-indigo-200 hover:bg-indigo-50 transition font-medium">
               <i className="fas fa-user mr-2"></i>Pembeli (Eceran)
             </button>
-            <button id="roleReseller" className="px-6 py-3 bg-white rounded-lg border border-indigo-200 hover:bg-indigo-50 transition font-medium">
+            <button id="roleReseller" className="role-btn px-6 py-3 bg-white rounded-lg border border-indigo-200 hover:bg-indigo-50 transition font-medium">
               <i className="fas fa-store mr-2"></i>Reseller (Grosir)
             </button>
           </div>
