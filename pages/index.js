@@ -174,12 +174,32 @@ export default function Home() {
         });
       }
 
+      // === Tambahkan WhatsApp Checkout di sini ===
+      let waMessage = 'Halo, saya ingin pesan:\n';
+      cart.forEach(item => {
+        waMessage += `- ${item.name} × ${item.quantity} → ${formatRupiah(item.price * item.quantity)}\n`;
+      });
+      waMessage += `\nTotal: ${formatRupiah(total)}`;
+      if (currentUser) {
+        waMessage += `\n\nNama: ${currentUser.name}`;
+        waMessage += `\nEmail: ${currentUser.email}`;
+      }
+      // Ganti dengan nomor WhatsApp Anda (format internasional tanpa +)
+      const waNumber = '6285790565666';
+      const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`;
+
       modal.innerHTML = `
         <div class="bg-white p-6 rounded-lg w-96 max-h-[80vh] overflow-y-auto">
           <h3 class="font-bold mb-4">Keranjang Belanja</h3>
           <div>${itemsHtml}</div>
           <div class="mt-4 font-bold text-lg">Total: ${formatRupiah(total)}</div>
-          <button class="mt-4 w-full bg-indigo-600 text-white py-2 rounded" onclick="document.getElementById('cartModal').remove()">
+          
+          <!-- Tombol WhatsApp -->
+          <a href="${waUrl}" target="_blank" class="mt-4 w-full bg-green-600 text-white py-2 rounded text-center block">
+            <i class="fab fa-whatsapp mr-2"></i>Pesan via WhatsApp
+          </a>
+          
+          <button class="mt-2 w-full bg-gray-600 text-white py-2 rounded" onclick="document.getElementById('cartModal').remove()">
             Tutup
           </button>
         </div>
@@ -312,7 +332,7 @@ export default function Home() {
       <Head>
         <title>ATAYATOKO - Sudah Online, Siap Bisnis</title>
         <meta name="description" content="Sistem integrasi usaha untuk mini market & reseller" />
-        {/* ✅ CDNs diperbaiki: hapus spasi di akhir URL */}
+        {/* ✅ CDN DIPERBAIKI: TANPA SPASI */}
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
