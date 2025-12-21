@@ -19,6 +19,7 @@ export default function AdminPanel() {
   const [imagePreview, setImagePreview] = useState('/placeholder.webp');
   const [productForm, setProductForm] = useState({
     name: '',
+    category: 'makanan',
     hargaBeli: 0,
     priceEcer: 0,
     priceGrosir: 0,
@@ -78,6 +79,10 @@ export default function AdminPanel() {
       alert('Nama produk wajib diisi!');
       return;
     }
+    if (productForm.priceEcer <= 0) {
+      alert('Harga ecer harus lebih dari 0!');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -96,6 +101,7 @@ export default function AdminPanel() {
       // Reset form
       setProductForm({
         name: '',
+        category: 'makanan',
         hargaBeli: 0,
         priceEcer: 0,
         priceGrosir: 0,
@@ -119,6 +125,7 @@ export default function AdminPanel() {
   const startEdit = (product) => {
     setProductForm({
       name: product.name || '',
+      category: product.category || 'makanan',
       hargaBeli: product.hargaBeli || 0,
       priceEcer: product.priceEcer || 0,
       priceGrosir: product.priceGrosir || 0,
@@ -138,10 +145,54 @@ export default function AdminPanel() {
     }
   };
 
+  // Handle import Excel
+  const handleExcelUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const data = new Uint8Array(evt.target.result);
+      const workbook = window.XLSX.read(data, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonData = window.XLSX.utils.sheet_to_json(worksheet);
+
+      if (jsonData.length === 0) {
+        alert('File Excel kosong!');
+        return;
+      }
+
+      let count = 0;
+      jsonData.forEach(async (row) => {
+        try {
+          await addDoc(collection(db, 'products'), {
+            name: row.nama || row.name || '',
+            category: row.kategori || row.category || 'makanan',
+            hargaBeli: Number(row.harga_beli) || 0,
+            priceEcer: Number(row.harga_ecer) || 0,
+            priceGrosir: Number(row.harga_grosir) || 0,
+            stock: Number(row.stok) || 0,
+            supplier: row.supplier || '',
+            imageUrl: row.foto || ''
+          });
+          count++;
+        } catch (err) {
+          console.error('Error simpan produk:', row, err);
+        }
+      });
+
+      alert(`Berhasil import ${count} produk!`);
+      fetchProducts();
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Head>
         <title>ATAYATOKO - Admin Panel</title>
+        {/* ✅ CDN SheetJS TANPA SPASI */}
         <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
       </Head>
 
@@ -187,7 +238,7 @@ export default function AdminPanel() {
               className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
             />
             <p className="text-xs text-gray-500 mt-1">
-              Gunakan foto berukuran kecil (< 500KB) untuk loading cepat
+              Gunakan foto berukuran kecil (&lt; 500KB) untuk loading cepat
             </p>
           </div>
 
@@ -204,6 +255,24 @@ export default function AdminPanel() {
               placeholder="Contoh: Indomie Goreng"
               className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
             />
+          </div>
+
+          {/* Kategori */}
+          <div className="mb-3">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Kategori
+            </label>
+            <select
+              name="category"
+              value={productForm.category}
+              onChange={handleInputChange}
+              className="w-full p-2 border rounded focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            >
+              <option value="makanan">Makanan</option>
+              <option value="minuman">Minuman</option>
+              <option value="kebersihan">Kebersihan</option>
+              <option value="perawatan">Perawatan</option>
+            </select>
           </div>
 
           {/* Harga Beli */}
@@ -224,7 +293,7 @@ export default function AdminPanel() {
           {/* Harga Ecer */}
           <div className="mb-3">
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Harga Ecer (Rp)
+              Harga Ecer (Rp) *
             </label>
             <input
               name="priceEcer"
@@ -299,6 +368,7 @@ export default function AdminPanel() {
               onClick={() => {
                 setProductForm({
                   name: '',
+                  category: 'makanan',
                   hargaBeli: 0,
                   priceEcer: 0,
                   priceGrosir: 0,
@@ -314,6 +384,20 @@ export default function AdminPanel() {
               Batal Edit
             </button>
           )}
+
+          {/* Import Excel */}
+          <div className="mt-6 pt-4 border-t">
+            <h3 className="font-bold mb-2">Import dari Excel</h3>
+            <input
+              type="file"
+              accept=".xlsx, .xls"
+              onChange={handleExcelUpload}
+              className="w-full p-2 border rounded text-sm"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Kolom: nama, kategori, harga_beli, harga_ecer, harga_grosir, stok, supplier, foto
+            </p>
+          </div>
         </div>
 
         {/* Daftar Produk */}
@@ -321,7 +405,7 @@ export default function AdminPanel() {
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold">Daftar Produk ({products.length})</h2>
             <div className="text-sm text-gray-500">
-              Klik produk untuk edit
+              Klik untuk edit | Klik 🗑️ untuk hapus
             </div>
           </div>
           
@@ -342,6 +426,7 @@ export default function AdminPanel() {
                   <div className="flex-1 min-w-0">
                     <h3 className="font-bold text-sm truncate">{p.name}</h3>
                     <div className="text-xs text-gray-600 space-y-1 mt-1">
+                      <div className="font-medium">{p.category}</div>
                       <div>Harga Beli: Rp {p.hargaBeli?.toLocaleString() || '0'}</div>
                       <div>Harga Ecer: Rp {p.priceEcer?.toLocaleString() || '0'}</div>
                       <div>Harga Grosir: Rp {p.priceGrosir?.toLocaleString() || '0'}</div>
