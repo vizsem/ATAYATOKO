@@ -23,15 +23,11 @@ export default function Admin() {
   });
   const [editingId, setEditingId] = useState(null);
 
-  // Cek login & proteksi role admin
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (user) => {
       if (user) {
-        // Ambil data user dari Firestore
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         const userData = userDoc.exists() ? userDoc.data() : null;
-        
-        // Hanya izinkan role 'admin'
         if (userData && userData.role === 'admin') {
           setUser(user);
           loadProducts();
@@ -52,7 +48,6 @@ export default function Admin() {
     setProducts(list);
   };
 
-  // POS Functions
   const addToCart = (product) => {
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
@@ -78,7 +73,6 @@ export default function Admin() {
 
   const saveOrder = async () => {
     if (cart.length === 0) return alert('Keranjang kosong!');
-    
     const total = cart.reduce((sum, item) => sum + ((item.priceEcer || 0) * item.quantity), 0);
     await addDoc(collection(db, 'orders'), {
       items: cart,
@@ -86,15 +80,12 @@ export default function Admin() {
       createdAt: serverTimestamp(),
       cashier: user?.email
     });
-
     setCart([]);
     alert('Order berhasil disimpan!');
   };
 
-  // Product CRUD
   const handleSaveProduct = async () => {
     if (!newProduct.name) return alert('Nama produk wajib diisi!');
-    
     if (editingId) {
       await updateDoc(doc(db, 'products', editingId), newProduct);
     } else {
@@ -120,36 +111,30 @@ export default function Admin() {
     }
   };
 
-  // ✅ IMPORT EXCEL (Pakai SheetJS dari CDN)
   const handleExcelUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (evt) => {
-      // Gunakan global XLSX (dari CDN)
       const data = new Uint8Array(evt.target.result);
       const workbook = window.XLSX.read(data, { type: 'array' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       const jsonData = window.XLSX.utils.sheet_to_json(worksheet);
-
       if (jsonData.length === 0) {
         alert('File Excel kosong!');
         return;
       }
-
-      // Simpan ke Firestore
       let count = 0;
       jsonData.forEach(async (row) => {
         try {
           await addDoc(collection(db, 'products'), {
             name: row.nama || row.name || '',
             category: row.kategori || row.category || 'lainnya',
-            priceEcer: Number(row.harga_ecer) || Number(row.priceEcer) || 0,
-            priceGrosir: Number(row.harga_grosir) || Number(row.priceGrosir) || 0,
-            stockEcer: Number(row.stok_ecer) || Number(row.stockEcer) || 0,
-            stockGrosir: Number(row.stok_grosir) || Number(row.stockGrosir) || 0,
+            priceEcer: Number(row.harga_ecer) || 0,
+            priceGrosir: Number(row.harga_grosir) || 0,
+            stockEcer: Number(row.stok_ecer) || 0,
+            stockGrosir: Number(row.stok_grosir) || 0,
             supplier: row.supplier || ''
           });
           count++;
@@ -157,7 +142,6 @@ export default function Admin() {
           console.error('Error simpan produk:', row, err);
         }
       });
-
       alert(`Berhasil import ${count} produk!`);
       loadProducts();
     };
@@ -165,14 +149,12 @@ export default function Admin() {
   };
 
   const totalCart = cart.reduce((sum, item) => sum + ((item.priceEcer || 0) * item.quantity), 0);
-
   if (!user) return <div className="p-6">Loading...</div>;
 
   return (
     <>
       <Head>
         <title>ATAYATOKO - Admin Panel</title>
-        {/* ✅ CDN SheetJS TANPA SPASI */}
         <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
       </Head>
 
@@ -193,8 +175,6 @@ export default function Admin() {
           {/* POS */}
           <div className="lg:col-span-2 bg-white p-4 rounded-lg shadow">
             <h2 className="text-xl font-bold mb-4">POS - Point of Sale</h2>
-            
-            {/* Daftar Produk */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-6">
               {products.map(p => (
                 <button
@@ -208,12 +188,11 @@ export default function Admin() {
               ))}
             </div>
 
-            {/* Keranjang */}
             <div>
               <h3 className="font-bold mb-2">Keranjang ({cart.length} item)</h3>
               {cart.length === 0 ? (
                 <p className="text-gray-500 text-sm">Kosong</p>
-              ) else (
+              ) : (
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {cart.map(item => (
                     <div key={item.id} className="flex justify-between items-center border-b pb-2">
@@ -261,8 +240,6 @@ export default function Admin() {
           {/* Manajemen Produk */}
           <div className="bg-white p-4 rounded-lg shadow">
             <h2 className="text-xl font-bold mb-4">Manajemen Produk</h2>
-
-            {/* Form */}
             <div className="space-y-3 mb-6">
               <input
                 value={newProduct.name}
@@ -309,7 +286,6 @@ export default function Admin() {
               </button>
             </div>
 
-            {/* Import Excel */}
             <div className="mb-6">
               <label className="block mb-2 font-medium text-sm">Import Excel (.xlsx)</label>
               <input
@@ -323,7 +299,6 @@ export default function Admin() {
               </p>
             </div>
 
-            {/* Daftar Produk */}
             <div>
               <h3 className="font-bold mb-2 text-sm">Produk ({products.length})</h3>
               <div className="space-y-1 max-h-60 overflow-y-auto text-sm">

@@ -1,8 +1,6 @@
 // pages/index.js
 import Head from 'next/head';
 import { useEffect } from 'react';
-
-// 🔥 Import Firebase DI ATAS
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth, db } from '../lib/firebase';
@@ -59,7 +57,7 @@ export default function Home() {
     ];
 
     let currentUser = null;
-    let cart = [];
+    let cart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
     let currentRole = 'pembeli';
 
     function formatRupiah(angka) {
@@ -89,6 +87,7 @@ export default function Home() {
       currentUser = null;
       cart = [];
       currentRole = 'pembeli';
+      localStorage.removeItem('atayatoko_cart');
       updateAuthUI();
       updateCartUI();
       alert('Anda telah logout.');
@@ -102,7 +101,7 @@ export default function Home() {
       if (currentUser) {
         authBtn.style.display = 'none';
         authProfile.style.display = 'flex';
-        document.getElementById('userName').textContent = currentUser.name;
+        document.getElementById('userEmail').textContent = currentUser.email;
         document.getElementById('userRole').textContent = 
           currentUser.role === 'pembeli' ? 'Pembeli' : 'Reseller';
       } else {
@@ -129,27 +128,24 @@ export default function Home() {
       modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
       modal.innerHTML = `
         <div class="bg-white p-6 rounded-lg w-96">
-          <h3 class="font-bold text-lg mb-4">Masuk / Daftar</h3>
+          <h3 class="font-bold text-lg mb-4">Masuk</h3>
           <input id="emailInput" type="email" placeholder="Email" class="w-full p-2 border mb-3" />
-          <input id="nameInput" type="text" placeholder="Nama Lengkap" class="w-full p-2 border mb-3" />
-          <input id="passwordInput" type="password" placeholder="Password" class="w-full p-2 border mb-3" />
           <select id="roleInput" class="w-full p-2 border mb-4">
             <option value="pembeli">Pembeli (Eceran)</option>
             <option value="reseller">Reseller (Grosir)</option>
           </select>
-          <button id="submitAuth" class="w-full bg-indigo-600 text-white py-2 rounded">Daftar / Masuk</button>
+          <button id="submitAuth" class="w-full bg-indigo-600 text-white py-2 rounded">Masuk</button>
         </div>
       `;
       document.body.appendChild(modal);
 
       document.getElementById('submitAuth').onclick = async () => {
-        const email = document.getElementById('emailInput').value;
-        const name = document.getElementById('nameInput').value;
-        const password = document.getElementById('passwordInput').value;
+        const email = document.getElementById('emailInput').value.trim();
         const role = document.getElementById('roleInput').value;
+        const password = 'rahasia123';
 
-        if (!email || !name || !password) {
-          alert('Semua kolom wajib diisi!');
+        if (!email) {
+          alert('Email wajib diisi!');
           return;
         }
 
@@ -159,10 +155,19 @@ export default function Home() {
           await createUserWithEmailAndPassword(auth, email, password);
         }
 
-        await saveUserToFirestore({ email, name, role });
+        await saveUserToFirestore({ email, role });
         modal.remove();
         updateAuthUI();
         updateRoleUI();
+
+        // Pindahkan keranjang lokal ke Firebase
+        const localCart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
+        if (localCart.length > 0) {
+          cart = localCart;
+          await saveCartToFirestore();
+          localStorage.removeItem('atayatoko_cart');
+          updateCartUI();
+        }
       };
 
       modal.onclick = (e) => {
@@ -195,8 +200,7 @@ export default function Home() {
       });
       waMessage += `\nTotal: ${formatRupiah(total)}`;
       if (currentUser) {
-        waMessage += `\n\nNama: ${currentUser.name}`;
-        waMessage += `\nEmail: ${currentUser.email}`;
+        waMessage += `\n\nEmail: ${currentUser.email}`;
       }
       const waNumber = '6285790565666';
       const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`;
@@ -263,23 +267,22 @@ export default function Home() {
 
       document.querySelectorAll('.buy-btn').forEach(btn => {
         btn.onclick = () => {
-  const id = Number(btn.dataset.id);
-  const price = Number(btn.dataset.price);
-  const name = btn.dataset.name;
-  const unit = btn.dataset.unit;
+          const id = Number(btn.dataset.id);
+          const price = Number(btn.dataset.price);
+          const name = btn.dataset.name;
+          const unit = btn.dataset.unit;
 
-  const existing = cart.find(item => item.id === id);
-  if (existing) {
-    existing.quantity += 1;
-  } else {
-    cart.push({ id, name, price, unit, quantity: 1 });
-  }
+          const existing = cart.find(item => item.id === id);
+          if (existing) {
+            existing.quantity += 1;
+          } else {
+            cart.push({ id, name, price, unit, quantity: 1 });
+          }
 
-  // Simpan ke localStorage (karena belum login)
-  localStorage.setItem('atayatoko_cart', JSON.stringify(cart));
-  updateCartUI();
-  alert(`${name} ditambahkan ke keranjang!`);
-  };
+          localStorage.setItem('atayatoko_cart', JSON.stringify(cart));
+          updateCartUI();
+          alert(`${name} ditambahkan ke keranjang!`);
+        };
       });
     }
 
@@ -339,7 +342,7 @@ export default function Home() {
         }
       } else {
         currentUser = null;
-        cart = [];
+        cart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
         currentRole = 'pembeli';
       }
       updateAuthUI();
@@ -357,7 +360,7 @@ export default function Home() {
       <Head>
         <title>ATAYATOKO - Sudah Online, Siap Bisnis</title>
         <meta name="description" content="Sistem integrasi usaha untuk mini market & reseller" />
-        {/* ✅ CDN DIPERBAIKI: TIDAK ADA SPASI */}
+        {/* ✅ CDN TANPA SPASI */}
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -379,10 +382,10 @@ export default function Home() {
               <span id="cartCount" className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">0</span>
             </button>
             <button id="authBtn" className="bg-indigo-600 text-white px-4 py-2 rounded-full font-medium hover:bg-indigo-700 transition">
-              Masuk / Daftar
+              Masuk
             </button>
             <div id="authProfile" className="hidden items-center space-x-2">
-              <span id="userName" className="text-sm font-medium"></span>
+              <span id="userEmail" className="text-sm font-medium"></span>
               <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded-full" id="userRole"></span>
               <button id="logoutBtn" className="text-gray-500 hover:text-gray-700">
                 <i className="fas fa-sign-out-alt"></i>
