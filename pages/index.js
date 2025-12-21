@@ -160,17 +160,73 @@ export default function Home() {
         }
 
         await saveUserToFirestore({ email, role });
-        modal.remove();
-        updateAuthUI();
-        updateCartUI();
 
-        // Pindahkan keranjang lokal ke Firebase
-        const localCart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
-        if (localCart.length > 0) {
-          cart = localCart;
-          await saveCartToFirestore();
-          localStorage.removeItem('atayatoko_cart');
+        // ✅ CEK ROLE SETELAH LOGIN
+        const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+        if (userDoc.exists() && userDoc.data().role === 'admin') {
+          modal.remove();
+          alert('Login admin berhasil!');
+          window.location.href = '/admin';
+        } else {
+          modal.remove();
+          updateAuthUI();
           updateCartUI();
+
+          // Pindahkan keranjang lokal ke Firebase
+          const localCart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
+          if (localCart.length > 0) {
+            cart = localCart;
+            await saveCartToFirestore();
+            localStorage.removeItem('atayatoko_cart');
+            updateCartUI();
+          }
+        }
+      };
+
+      modal.onclick = (e) => {
+        if (e.target === modal) modal.remove();
+      };
+    }
+
+    // ✅ FUNGSI LOGIN ADMIN RAHASIA
+    function showAdminLoginModal() {
+      if (document.getElementById('adminLoginModal')) return;
+
+      const modal = document.createElement('div');
+      modal.id = 'adminLoginModal';
+      modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+      modal.innerHTML = `
+        <div class="bg-white p-6 rounded-lg w-96">
+          <h3 class="font-bold text-lg mb-4">🔐 Login Admin</h3>
+          <input id="adminEmail" type="email" placeholder="Email Admin" class="w-full p-2 border mb-3" />
+          <input id="adminPassword" type="password" placeholder="Password" class="w-full p-2 border mb-3" />
+          <button id="submitAdminLogin" class="w-full bg-red-600 text-white py-2 rounded">Login Admin</button>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      document.getElementById('submitAdminLogin').onclick = async () => {
+        const email = document.getElementById('adminEmail').value.trim();
+        const password = document.getElementById('adminPassword').value;
+
+        if (!email || !password) {
+          alert('Email dan password wajib diisi!');
+          return;
+        }
+
+        try {
+          await signInWithEmailAndPassword(auth, email, password);
+          const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+          if (userDoc.exists() && userDoc.data().role === 'admin') {
+            modal.remove();
+            alert('Login admin berhasil!');
+            window.location.href = '/admin';
+          } else {
+            alert('Akun ini bukan admin!');
+            await signOut(auth);
+          }
+        } catch (err) {
+          alert('Login gagal: ' + err.message);
         }
       };
 
@@ -321,6 +377,19 @@ export default function Home() {
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) logoutBtn.onclick = handleLogout;
 
+    // ✅ TOMBOL ADMIN RAHASIA
+    const adminLoginBtn = document.getElementById('adminLoginBtn');
+    if (adminLoginBtn) {
+      adminLoginBtn.onclick = () => {
+        const user = JSON.parse(localStorage.getItem('atayatoko_user') || 'null');
+        if (user && user.role === 'admin') {
+          window.location.href = '/admin';
+        } else {
+          showAdminLoginModal();
+        }
+      };
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
@@ -373,6 +442,16 @@ export default function Home() {
               <i className="fas fa-shopping-cart"></i>
               <span id="cartCount" className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">0</span>
             </button>
+
+            {/* ✅ TOMBOL ADMIN RAHASIA (GEMBOK) */}
+            <button 
+              id="adminLoginBtn"
+              className="text-red-600 hover:text-red-800 font-medium hidden md:block"
+              title="Login Admin"
+            >
+              🔒
+            </button>
+
             <button id="authBtn" className="bg-indigo-600 text-white px-4 py-2 rounded-full font-medium hover:bg-indigo-700 transition">
               Masuk / Daftar
             </button>
