@@ -1,18 +1,16 @@
 // pages/index.js
 import Head from 'next/head';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
-// 🔥 Import Firebase DI ATAS (diperbolehkan di Pages Router)
+// 🔥 Import Firebase DI ATAS
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth, db } from '../lib/firebase';
 
 export default function Home() {
-  // Untuk memastikan kode jalan di browser saja
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    // ========== DATA ==========
     const products = [
       {
         id: 1,
@@ -156,10 +154,8 @@ export default function Home() {
         }
 
         try {
-          // Coba login
           await signInWithEmailAndPassword(auth, email, password);
         } catch (err) {
-          // Jika gagal, daftar
           await createUserWithEmailAndPassword(auth, email, password);
         }
 
@@ -203,7 +199,7 @@ export default function Home() {
         waMessage += `\nEmail: ${currentUser.email}`;
       }
       const waNumber = '6285790565666';
-      const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`; // ✅ TANPA SPASI
+      const waUrl = `https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`;
 
       modal.innerHTML = `
         <div class="bg-white p-6 rounded-lg w-96 max-h-[80vh] overflow-y-auto">
@@ -298,7 +294,6 @@ export default function Home() {
       displayProducts();
     }
 
-    // ========== EVENT LISTENERS ==========
     const rolePembeli = document.getElementById('rolePembeli');
     const roleReseller = document.getElementById('roleReseller');
     if (rolePembeli) rolePembeli.onclick = () => { 
@@ -333,7 +328,6 @@ export default function Home() {
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) logoutBtn.onclick = handleLogout;
 
-    // ========== FIREBASE AUTH LISTENER ==========
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
@@ -356,10 +350,8 @@ export default function Home() {
       updateRoleUI();
     });
 
-    // Init UI
     document.querySelector('.category-btn[data-category="all"]').classList.add('bg-indigo-600', 'text-white');
 
-    // Cleanup
     return () => unsubscribe();
   }, []);
 
@@ -368,7 +360,7 @@ export default function Home() {
       <Head>
         <title>ATAYATOKO - Sudah Online, Siap Bisnis</title>
         <meta name="description" content="Sistem integrasi usaha untuk mini market & reseller" />
-        {/* ✅ CDN TANPA SPASI */}
+        {/* ✅ CDN DIPERBAIKI: TIDAK ADA SPASI */}
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -378,9 +370,6 @@ export default function Home() {
         `}</style>
       </Head>
 
-      {/* ... JSX sama seperti sebelumnya ... */}
-      {/* (tidak perlu diubah, karena sudah benar) */}
-      
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center space-x-2">
@@ -405,8 +394,6 @@ export default function Home() {
           </div>
         </div>
       </header>
-
-      {/* ... bagian lainnya sama ... */}
 
       <section className="hero-gradient text-white py-16 md:py-24">
         <div className="container mx-auto px-4 text-center">
