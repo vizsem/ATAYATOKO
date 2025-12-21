@@ -128,24 +128,25 @@ export default function Home() {
       modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
       modal.innerHTML = `
         <div class="bg-white p-6 rounded-lg w-96">
-          <h3 class="font-bold text-lg mb-4">Masuk</h3>
+          <h3 class="font-bold text-lg mb-4">Masuk / Daftar</h3>
           <input id="emailInput" type="email" placeholder="Email" class="w-full p-2 border mb-3" />
+          <input id="passwordInput" type="password" placeholder="Password" class="w-full p-2 border mb-3" />
           <select id="roleInput" class="w-full p-2 border mb-4">
             <option value="pembeli">Pembeli (Eceran)</option>
             <option value="reseller">Reseller (Grosir)</option>
           </select>
-          <button id="submitAuth" class="w-full bg-indigo-600 text-white py-2 rounded">Masuk</button>
+          <button id="submitAuth" class="w-full bg-indigo-600 text-white py-2 rounded">Masuk / Daftar</button>
         </div>
       `;
       document.body.appendChild(modal);
 
       document.getElementById('submitAuth').onclick = async () => {
         const email = document.getElementById('emailInput').value.trim();
+        const password = document.getElementById('passwordInput').value;
         const role = document.getElementById('roleInput').value;
-        const password = 'rahasia123';
 
-        if (!email) {
-          alert('Email wajib diisi!');
+        if (!email || !password) {
+          alert('Email dan Password wajib diisi!');
           return;
         }
 
@@ -382,7 +383,7 @@ export default function Home() {
               <span id="cartCount" className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">0</span>
             </button>
             <button id="authBtn" className="bg-indigo-600 text-white px-4 py-2 rounded-full font-medium hover:bg-indigo-700 transition">
-              Masuk
+              Masuk / Daftar
             </button>
             <div id="authProfile" className="hidden items-center space-x-2">
               <span id="userEmail" className="text-sm font-medium"></span>
