@@ -1,7 +1,7 @@
 // pages/index.js
 import Head from 'next/head';
-import { useEffect } from 'react';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import { doc, setDoc, getDoc, collection, onSnapshot } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth, db } from '../lib/firebase';
 
@@ -9,55 +9,11 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const products = [
-      {
-        id: 1,
-        name: "Indomie Goreng",
-        category: "makanan",
-        image: "https://placehold.co/300x300/f3f4f6/9ca3af?text=Indomie+Goreng",
-        priceEcer: 3500,
-        priceGrosir: 2800,
-        unitGrosir: "dus (48 pcs)",
-        stockEcer: 500,
-        stockGrosir: 20
-      },
-      {
-        id: 2,
-        name: "Aqua 600ml",
-        category: "minuman",
-        image: "https://placehold.co/300x300/f3f4f6/9ca3af?text=Aqua+600ml",
-        priceEcer: 4000,
-        priceGrosir: 3200,
-        unitGrosir: "dus (24 pcs)",
-        stockEcer: 300,
-        stockGrosir: 15
-      },
-      {
-        id: 3,
-        name: "Sari Roti Tawar",
-        category: "makanan",
-        image: "https://placehold.co/300x300/f3f4f6/9ca3af?text=Sari+Roti",
-        priceEcer: 12000,
-        priceGrosir: 9500,
-        unitGrosir: "kardus (20 pcs)",
-        stockEcer: 200,
-        stockGrosir: 10
-      },
-      {
-        id: 4,
-        name: "Lifebuoy Sabun Mandi",
-        category: "perawatan",
-        image: "https://placehold.co/300x300/f3f4f6/9ca3af?text=Lifebuoy",
-        priceEcer: 5500,
-        priceGrosir: 4200,
-        unitGrosir: "dus (36 pcs)",
-        stockEcer: 150,
-        stockGrosir: 8
-      }
-    ];
-
+    // State produk diambil dari Firestore
     let currentUser = null;
     let cart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
+    const [products, setProducts] = useState([]);
+    const [loading, setLoading] = useState(true);
 
     function formatRupiah(angka) {
       return new Intl.NumberFormat('id-ID', {
@@ -87,7 +43,7 @@ export default function Home() {
       localStorage.removeItem('atayatoko_cart');
       updateAuthUI();
       updateCartUI();
-      // Reset UI role ke default
+      // Reset UI role
       document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('bg-indigo-600', 'text-white'));
       document.getElementById('rolePembeli').classList.add('bg-indigo-600', 'text-white');
       displayProducts();
@@ -103,14 +59,14 @@ export default function Home() {
         document.getElementById('userEmail').textContent = currentUser.email;
         document.getElementById('userRole').textContent = 
           currentUser.role === 'pembeli' ? 'Pembeli' : 'Reseller';
-        // Set role UI sesuai user
+        // Set role UI
         document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('bg-indigo-600', 'text-white'));
         const roleBtn = currentUser.role === 'pembeli' ? 'rolePembeli' : 'roleReseller';
         document.getElementById(roleBtn).classList.add('bg-indigo-600', 'text-white');
       } else {
         authBtn.style.display = 'block';
         authProfile.style.display = 'none';
-        // Reset ke role default untuk tamu
+        // Reset ke role default
         document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('bg-indigo-600', 'text-white'));
         document.getElementById('rolePembeli').classList.add('bg-indigo-600', 'text-white');
       }
@@ -161,7 +117,7 @@ export default function Home() {
 
         await saveUserToFirestore({ email, role });
 
-        // ✅ CEK ROLE SETELAH LOGIN
+        // Cek role admin
         const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
         if (userDoc.exists() && userDoc.data().role === 'admin') {
           modal.remove();
@@ -172,7 +128,6 @@ export default function Home() {
           updateAuthUI();
           updateCartUI();
 
-          // Pindahkan keranjang lokal ke Firebase
           const localCart = JSON.parse(localStorage.getItem('atayatoko_cart') || '[]');
           if (localCart.length > 0) {
             cart = localCart;
@@ -188,7 +143,6 @@ export default function Home() {
       };
     }
 
-    // ✅ FUNGSI LOGIN ADMIN RAHASIA
     function showAdminLoginModal() {
       if (document.getElementById('adminLoginModal')) return;
 
@@ -288,25 +242,29 @@ export default function Home() {
       const container = document.getElementById('productsContainer');
       if (!container) return;
 
-      // Ambil role dari UI, bukan dari currentUser (untuk dukung tamu)
       const rolePembeliActive = document.getElementById('rolePembeli')?.classList.contains('bg-indigo-600');
       const currentRole = rolePembeliActive ? 'pembeli' : 'reseller';
 
-      const filtered = category === 'all'
-        ? products
-        : products.filter(p => p.category === category);
+      let filtered = products;
+      if (category !== 'all') {
+        filtered = products.filter(p => p.category === category);
+      }
 
       container.innerHTML = '';
       filtered.forEach(product => {
+        // Ambil harga & stok sesuai role
         const price = currentRole === 'pembeli' ? product.priceEcer : product.priceGrosir;
-        const stock = currentRole === 'pembeli' ? product.stockEcer : product.stockGrosir;
-        const unit = currentRole === 'pembeli' ? 'pcs' : product.unitGrosir;
+        const stock = product.stock || 0; // Stok tunggal
+        const unit = currentRole === 'pembeli' ? 'pcs' : 'grosir';
         const stockColor = stock < 10 ? 'text-red-600' : 'text-green-600';
 
         const card = document.createElement('div');
         card.className = 'bg-white rounded-xl overflow-hidden shadow-md';
         card.innerHTML = `
-          <img src="${product.image}" alt="${product.name}" class="w-full h-48 object-cover">
+          <img src="${product.imageUrl || '/placeholder.webp'}" 
+               alt="${product.name}" 
+               class="w-full h-48 object-cover"
+               onerror="this.src='/placeholder.webp'">
           <div class="p-4">
             <h3 class="font-semibold text-sm mb-2">${product.name}</h3>
             <div class="space-y-1 text-xs">
@@ -318,6 +276,9 @@ export default function Home() {
               <div>
                 <span class="text-gray-600">Stok:</span> 
                 <span class="${stockColor} font-medium">${stock} ${unit}</span>
+              </div>
+              <div class="text-xs text-gray-500">
+                <span>Harga beli: ${formatRupiah(product.hargaBeli || 0)}</span>
               </div>
             </div>
             <button class="buy-btn mt-3 w-full bg-indigo-600 text-white py-2 rounded-lg text-sm"
@@ -364,7 +325,8 @@ export default function Home() {
       btn.onclick = () => {
         document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('bg-indigo-600', 'text-white'));
         btn.classList.add('bg-indigo-600', 'text-white');
-        displayProducts(btn.dataset.category);
+        const category = btn.dataset.category;
+        displayProducts(category === 'kebersihan' ? 'perawatan' : category); // sesuaikan jika perlu
       };
     });
 
@@ -377,7 +339,6 @@ export default function Home() {
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) logoutBtn.onclick = handleLogout;
 
-    // ✅ TOMBOL ADMIN RAHASIA
     const adminLoginBtn = document.getElementById('adminLoginBtn');
     if (adminLoginBtn) {
       adminLoginBtn.onclick = () => {
@@ -390,7 +351,15 @@ export default function Home() {
       };
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    // ✅ MUAT PRODUK DARI FIRESTORE SECARA REAL-TIME
+    const unsubscribeProducts = onSnapshot(collection(db, 'products'), (snapshot) => {
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setProducts(list);
+      setLoading(false);
+      displayProducts(); // Update UI saat data berubah
+    });
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         if (userDoc.exists()) {
@@ -408,12 +377,14 @@ export default function Home() {
       updateCartUI();
     });
 
-    // Inisialisasi UI default
+    // Inisialisasi UI
     document.querySelector('.category-btn[data-category="all"]').classList.add('bg-indigo-600', 'text-white');
     document.getElementById('rolePembeli').classList.add('bg-indigo-600', 'text-white');
-    displayProducts();
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeProducts();
+      unsubscribeAuth();
+    };
   }, []);
 
   return (
@@ -421,7 +392,6 @@ export default function Home() {
       <Head>
         <title>ATAYATOKO - Sudah Online, Siap Bisnis</title>
         <meta name="description" content="Sistem integrasi usaha untuk mini market & reseller" />
-        {/* ✅ CDN TANPA SPASI */}
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -442,8 +412,6 @@ export default function Home() {
               <i className="fas fa-shopping-cart"></i>
               <span id="cartCount" className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">0</span>
             </button>
-
-            {/* ✅ TOMBOL ADMIN RAHASIA (GEMBOK) */}
             <button 
               id="adminLoginBtn"
               className="text-red-600 hover:text-red-800 font-medium hidden md:block"
@@ -451,7 +419,6 @@ export default function Home() {
             >
               🔒
             </button>
-
             <button id="authBtn" className="bg-indigo-600 text-white px-4 py-2 rounded-full font-medium hover:bg-indigo-700 transition">
               Masuk / Daftar
             </button>
@@ -512,6 +479,7 @@ export default function Home() {
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6" id="productsContainer">
+            {/* Produk akan diisi otomatis dari Firestore */}
           </div>
         </div>
       </section>
