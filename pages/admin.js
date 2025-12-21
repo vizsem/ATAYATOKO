@@ -9,7 +9,8 @@ import {
   updateDoc,
   deleteDoc,
   doc,
-  serverTimestamp
+  serverTimestamp,
+  getDoc
 } from 'firebase/firestore';
 
 export default function Admin() {
@@ -22,12 +23,22 @@ export default function Admin() {
   });
   const [editingId, setEditingId] = useState(null);
 
-  // Cek login
+  // Cek login & proteksi role admin
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((user) => {
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
       if (user) {
-        setUser(user);
-        loadProducts();
+        // Ambil data user dari Firestore
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        const userData = userDoc.exists() ? userDoc.data() : null;
+        
+        // Hanya izinkan role 'admin'
+        if (userData && userData.role === 'admin') {
+          setUser(user);
+          loadProducts();
+        } else {
+          alert('Akses ditolak! Hanya admin yang boleh masuk.');
+          window.location.href = '/';
+        }
       } else {
         window.location.href = '/';
       }
@@ -161,7 +172,7 @@ export default function Admin() {
     <>
       <Head>
         <title>ATAYATOKO - Admin Panel</title>
-        {/* ✅ Load SheetJS dari CDN (aman & terbaru) */}
+        {/* ✅ CDN SheetJS TANPA SPASI */}
         <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
       </Head>
 
@@ -202,7 +213,7 @@ export default function Admin() {
               <h3 className="font-bold mb-2">Keranjang ({cart.length} item)</h3>
               {cart.length === 0 ? (
                 <p className="text-gray-500 text-sm">Kosong</p>
-              ) : (
+              ) else (
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {cart.map(item => (
                     <div key={item.id} className="flex justify-between items-center border-b pb-2">

@@ -262,27 +262,24 @@ export default function Home() {
       });
 
       document.querySelectorAll('.buy-btn').forEach(btn => {
-        btn.onclick = async () => {
-          if (!currentUser) {
-            alert('Silakan login terlebih dahulu!');
-            showAuthModal();
-            return;
-          }
-          const id = Number(btn.dataset.id);
-          const price = Number(btn.dataset.price);
-          const name = btn.dataset.name;
-          const unit = btn.dataset.unit;
+        btn.onclick = () => {
+  const id = Number(btn.dataset.id);
+  const price = Number(btn.dataset.price);
+  const name = btn.dataset.name;
+  const unit = btn.dataset.unit;
 
-          const existing = cart.find(item => item.id === id);
-          if (existing) {
-            existing.quantity += 1;
-          } else {
-            cart.push({ id, name, price, unit, quantity: 1 });
-          }
-          await saveCartToFirestore();
-          updateCartUI();
-          alert(`${name} ditambahkan ke keranjang!`);
-        };
+  const existing = cart.find(item => item.id === id);
+  if (existing) {
+    existing.quantity += 1;
+  } else {
+    cart.push({ id, name, price, unit, quantity: 1 });
+  }
+
+  // Simpan ke localStorage (karena belum login)
+  localStorage.setItem('atayatoko_cart', JSON.stringify(cart));
+  updateCartUI();
+  alert(`${name} ditambahkan ke keranjang!`);
+  };
       });
     }
 
