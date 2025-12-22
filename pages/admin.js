@@ -20,7 +20,7 @@ import {
 } from 'firebase/auth';
 import { Html5Qrcode } from "html5-qrcode";
 import { auth, db } from '../lib/firebase';
-
+export const dynamic = 'force-client';
 export default function AdminPanel() {
   const router = useRouter();
   const [products, setProducts] = useState([]);
