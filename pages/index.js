@@ -23,20 +23,18 @@ export async function getStaticProps() {
     const snapshot = await getDocs(collection(db, 'products'));
     const products = snapshot.docs.map(doc => {
       const data = doc.data();
-      // ✅ Konversi Timestamp ke string ISO (wajib untuk Vercel)
+      // ✅ Handle undefined & konversi Timestamp
       return {
         id: doc.id,
         ...data,
-        createdAt: data.createdAt?.toDate?.().toISOString?.() || data.createdAt,
-        updatedAt: data.updatedAt?.toDate?.().toISOString?.() || data.updatedAt,
+        createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
+        updatedAt: data.updatedAt ? data.updatedAt.toDate().toISOString() : null,
       };
     });
 
     return {
-      props: {
-        products
-      },
-      revalidate: 300 // Regenerate setiap 5 menit
+      props: { products },
+      revalidate: 300
     };
   } catch (error) {
     console.error('ISR Error:', error);
