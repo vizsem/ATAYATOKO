@@ -1,31 +1,62 @@
 // pages/index.js
 import Head from 'next/head';
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  onSnapshot
+import {
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs // ✅ diganti dari onSnapshot ke getDocs
 } from 'firebase/firestore';
-import { 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  onAuthStateChanged, 
-  signOut 
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut
 } from 'firebase/auth';
 import { auth, db } from '../lib/firebase';
 
-export default function Home() {
+// 🌐 ISR: Data diambil di server, di-cache 5 menit
+export async function getStaticProps() {
+  try {
+    const snapshot = await getDocs(collection(db, 'products'));
+    const products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    return {
+      props: {
+        products
+      },
+      // 💡 Regenerate setiap 300 detik (5 menit)
+      revalidate: 300
+    };
+  } catch (error) {
+    console.error('ISR Error:', error);
+    return { props: { products: [] }, revalidate: 300 };
+  }
+}
+
+export default function Home({ products }) {
   const router = useRouter();
-  const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [currentRole, setCurrentRole] = useState('pembeli');
   const [activeCategory, setActiveCategory] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
-  const [isMenuOpen, setIsMenuOpen] = useState(false); // ✅ Hamburger state
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState(''); // ✅ State pencarian
+
+  // ✅ Kategori termasuk "Snack"
+  const categories = [
+    { id: 'all', name: 'Semua' },
+    { id: 'promo', name: 'Promo' },
+    { id: 'makanan', name: 'Makanan' },
+    { id: 'snack', name: 'Snack' }, // ✅ Ditambahkan
+    { id: 'minuman', name: 'Minuman' },
+    { id: 'kebersihan', name: 'Kebersihan' },
+    { id: 'perawatan', name: 'Perawatan' }
+  ];
+
   const PRODUCTS_PER_PAGE = 12;
 
   // Format Rupiah
@@ -36,15 +67,6 @@ export default function Home() {
       minimumFractionDigits: 0
     }).format(angka);
   };
-
-  // Muat produk
-  useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setProducts(list);
-    });
-    return () => unsubscribe();
-  }, []);
 
   // Muat keranjang dari localStorage
   useEffect(() => {
@@ -150,12 +172,30 @@ export default function Home() {
     waMessage += `\nTotal: ${formatRupiah(cart.reduce((sum, item) => sum + (item.price * item.quantity), 0))}`;
     if (currentUser) waMessage += `\n\nEmail: ${currentUser.email}`;
     const waNumber = '6285790565666';
+    // ✅ Perbaiki spasi di URL
     window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`, '_blank');
   };
 
+  // ✅ Filter: Kategori + Pencarian
   const getFilteredProducts = () => {
-    if (activeCategory === 'all') return products;
-    return products.filter(p => p.category === activeCategory);
+    let filtered = products;
+
+    // Filter kategori
+    if (activeCategory !== 'all') {
+      filtered = filtered.filter(p => p.category === activeCategory);
+    }
+
+    // Filter pencarian
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(term) ||
+        (p.sku && p.sku.toLowerCase().includes(term)) ||
+        (p.barcode && p.barcode.includes(term))
+      );
+    }
+
+    return filtered;
   };
 
   const filteredProducts = getFilteredProducts();
@@ -163,18 +203,11 @@ export default function Home() {
   const startIndex = (currentPage - 1) * PRODUCTS_PER_PAGE;
   const currentProducts = filteredProducts.slice(startIndex, startIndex + PRODUCTS_PER_PAGE);
 
-  const categories = [
-    { id: 'all', name: 'Semua' },
-    { id: 'promo', name: 'Promo' },
-    { id: 'makanan', name: 'Makanan' },
-    { id: 'minuman', name: 'Minuman' },
-    { id: 'kebersihan', name: 'Kebersihan' },
-    { id: 'perawatan', name: 'Perawatan' }
-  ];
-
   const getCategoryProducts = (categoryId) => {
     if (categoryId === 'all') return [];
-    return products.filter(p => p.category === categoryId).slice(0, 5);
+    return products
+      .filter(p => p.category === categoryId)
+      .slice(0, 5);
   };
 
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -302,7 +335,6 @@ export default function Home() {
             <h1 className="text-xl sm:text-2xl font-bold text-indigo-700">ATAYATOKO</h1>
           </div>
 
-          {/* Hamburger Menu (Mobile) */}
           <div className="md:hidden">
             <button 
               onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -312,7 +344,6 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Desktop Menu */}
           <div className="hidden md:flex items-center space-x-4">
             <button 
               onClick={() => setShowCartModal(true)}
@@ -351,7 +382,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Mobile Dropdown Menu */}
+        {/* Mobile Menu */}
         {isMenuOpen && (
           <div className="md:hidden bg-white py-3 px-4 shadow-lg border-t">
             <button 
@@ -436,9 +467,26 @@ export default function Home() {
         </div>
       </section>
 
-      {/* === CATEGORIES === */}
+      {/* === CATEGORIES + SEARCH === */}
       <section className="py-6 sm:py-8 bg-gray-100">
         <div className="container mx-auto px-4">
+          {/* ✅ Pencarian */}
+          <div className="mb-4 max-w-2xl mx-auto">
+            <div className="relative">
+              <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+              <input
+                type="text"
+                placeholder="Cari produk, nama, atau kode..."
+                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-base"
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1); // Reset ke halaman 1 saat cari
+                }}
+              />
+            </div>
+          </div>
+
           <h2 className="text-xl sm:text-2xl font-bold text-center mb-4">Kategori Produk</h2>
           <div className="flex flex-wrap justify-center gap-2">
             {categories.map(cat => (
@@ -447,6 +495,7 @@ export default function Home() {
                 onClick={() => {
                   setActiveCategory(cat.id);
                   setCurrentPage(1);
+                  setSearchTerm(''); // Kosongkan pencarian saat ganti kategori
                   setIsMenuOpen(false);
                 }}
                 className={`px-3 py-1.5 sm:px-5 sm:py-2 rounded-full border font-medium text-xs sm:text-sm ${
@@ -475,14 +524,16 @@ export default function Home() {
                     <h2 className="text-xl sm:text-2xl font-bold">{cat.name}</h2>
                     {categoryProducts.length > 5 && (
                       <button 
-                        onClick={() => setActiveCategory(cat.id)}
+                        onClick={() => {
+                          setActiveCategory(cat.id);
+                          setSearchTerm('');
+                        }}
                         className="text-indigo-600 hover:text-indigo-800 font-medium text-sm"
                       >
                         Lihat Semua →
                       </button>
                     )}
                   </div>
-                  {/* ✅ Grid mobile-optimized */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
                     {categoryProducts.map(product => {
                       const price = currentRole === 'pembeli' ? product.priceEcer : product.priceGrosir;
@@ -534,7 +585,11 @@ export default function Home() {
             
             {currentProducts.length === 0 ? (
               <div className="text-center py-10">
-                <p className="text-gray-500 text-base">Tidak ada produk di kategori ini</p>
+                <p className="text-gray-500 text-base">
+                  {searchTerm 
+                    ? `Tidak ada produk yang cocok dengan "${searchTerm}"`
+                    : 'Tidak ada produk di kategori ini'}
+                </p>
               </div>
             ) : (
               <>
