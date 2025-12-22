@@ -58,9 +58,8 @@ export default function AdminPanel() {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return router.push('/');
       
-      const userDoc = await doc(db, 'users', user.uid);
-      const userData = await getDoc(userDoc);
-      if (!userData.exists() || userData.data().role !== 'admin') {
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      if (!userDoc.exists() || userDoc.data().role !== 'admin') {
         alert('Akses ditolak!');
         router.push('/');
       } else {
@@ -356,7 +355,7 @@ ${receiptData.storeName}
     }
   };
 
-  // ✅ IMPORT EXCEL DENGAN SHEETJS
+  // ✅ IMPORT EXCEL UNTUK PRODUK
   const handleImportExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -440,21 +439,61 @@ ${receiptData.storeName}
     reader.readAsArrayBuffer(file);
   };
 
-  // Ekspor laporan
+  // ✅ EKSPOR DATA PRODUK (BUKAN LAPORAN)
+  const exportProducts = () => {
+    const data = products.map(product => ({
+      'nama': product.name || '',
+      'kategori': product.category || 'makanan',
+      'harga_beli': product.hargaBeli || 0,
+      'harga_ecer': product.priceEcer || 0,
+      'harga_grosir': product.priceGrosir || 0,
+      'stok': product.stock || 0,
+      'supplier': product.supplier || '',
+      'foto': product.imageUrl || ''
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Data Produk");
+    
+    // Auto-size kolom
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const col = XLSX.utils.decode_col(XLSX.utils.encode_col(C));
+      ws['!cols'] = ws['!cols'] || [];
+      ws['!cols'][C] = { wch: 15 };
+    }
+    
+    XLSX.writeFile(wb, "produk_atayatoko.xlsx");
+  };
+
+  // ✅ EKSPOR LAPORAN PENJUALAN
   const exportSalesReport = () => {
     const data = salesReport.map(order => ({
-      'Tanggal': order.date,
-      'Jam': order.time,
-      'No. Struk': order.id,
-      'Kasir': order.cashier,
-      'Total': order.total,
-      'Metode Bayar': order.paymentMethod
+      'No. Struk': order.id || '',
+      'Tanggal': order.date || '',
+      'Jam': order.time || '',
+      'Kasir': order.cashier || '',
+      'Total': order.total || 0,
+      'Metode Bayar': 
+        order.paymentMethod === 'cash' ? 'Tunai' :
+        order.paymentMethod === 'card' ? 'Kartu Kredit' : 'E-Wallet',
+      'Item': order.items?.map(i => `${i.name} x${i.quantity}`).join('; ') || ''
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Laporan Penjualan");
-    XLSX.writeFile(wb, `laporan_penjualan_${reportPeriod}.xlsx`);
+    
+    // Auto-size kolom
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const col = XLSX.utils.decode_col(XLSX.utils.encode_col(C));
+      ws['!cols'] = ws['!cols'] || [];
+      ws['!cols'][C] = { wch: 18 };
+    }
+    
+    XLSX.writeFile(wb, `laporan_penjualan_${reportPeriod}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const categories = ['all', 'makanan', 'minuman', 'kebersihan', 'perawatan'];
@@ -532,7 +571,6 @@ ${receiptData.storeName}
               <button
                 onClick={() => {
                   setActiveTab('reports');
-                  // Laporan akan dimuat via useEffect
                 }}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
                   activeTab === 'reports'
@@ -717,17 +755,19 @@ ${receiptData.storeName}
       {activeTab === 'backoffice' && (
         <div className="p-6">
           <div className="bg-white rounded-xl shadow-sm p-6">
+            {/* ✅ TOMBOL EKSPOR/IMPOR PRODUK */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
               <h2 className="text-2xl font-bold text-gray-900 mb-4 sm:mb-0">Manajemen Produk</h2>
               <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                {/* ✅ EKSPOR PRODUK */}
                 <button
-                  onClick={exportSalesReport}
+                  onClick={exportProducts}
                   className="flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
                 >
-                  <i className="fas fa-file-download mr-2"></i>
-                  Export Excel
+                  <i className="fas fa-file-export mr-2"></i>
+                  Ekspor Produk
                 </button>
-                {/* ✅ TOMBOL IMPORT EXCEL */}
+                {/* ✅ IMPOR PRODUK */}
                 <input
                   type="file"
                   accept=".xlsx,.xls"
@@ -739,8 +779,8 @@ ${receiptData.storeName}
                   htmlFor="importExcel"
                   className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors cursor-pointer"
                 >
-                  <i className="fas fa-file-upload mr-2"></i>
-                  Import Excel
+                  <i className="fas fa-file-import mr-2"></i>
+                  Impor Produk
                 </label>
               </div>
             </div>
@@ -943,6 +983,7 @@ ${receiptData.storeName}
           <div className="bg-white rounded-xl shadow-sm p-6">
             <h2 className="text-2xl font-bold text-gray-900 mb-4">Laporan Penjualan</h2>
             
+            {/* ✅ TOMBOL EKSPOR LAPORAN */}
             <div className="flex gap-4 mb-6">
               {['today', 'week', 'month'].map(period => (
                 <button
@@ -958,12 +999,13 @@ ${receiptData.storeName}
                    period === 'week' ? '7 Hari' : '30 Hari'}
                 </button>
               ))}
+              {/* ✅ EKSPOR LAPORAN */}
               <button
                 onClick={exportSalesReport}
                 className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center"
               >
                 <i className="fas fa-file-excel mr-2"></i>
-                Ekspor ke Excel
+                Ekspor Laporan
               </button>
             </div>
 
@@ -1004,7 +1046,7 @@ ${receiptData.storeName}
                       <td className="p-3 text-right font-medium">{formatRupiah(order.total)}</td>
                       <td className="p-3">
                         {order.paymentMethod === 'cash' ? 'Tunai' : 
-                         order.paymentMethod === 'card' ? 'Kartu' : 'E-Wallet'}
+                         order.paymentMethod === 'card' ? 'Kartu Kredit' : 'E-Wallet'}
                       </td>
                     </tr>
                   ))}
