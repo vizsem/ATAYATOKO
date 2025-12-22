@@ -12,7 +12,8 @@
     "firebase": "^10.12.0",
     "next": "16.1.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-thermal-printer": "^0.22.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -10,7 +10,11 @@ import {
   doc, 
   getDocs,
   getDoc,
-  onSnapshot
+  onSnapshot,
+  writeBatch,
+  increment,
+  query,
+  where
 } from 'firebase/firestore';
 import { 
   onAuthStateChanged, 
@@ -30,7 +34,7 @@ export default function AdminPanel() {
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [cashReceived, setCashReceived] = useState('');
   const [receiptData, setReceiptData] = useState(null);
-  const [activeTab, setActiveTab] = useState('pos'); // 'pos' or 'backoffice'
+  const [activeTab, setActiveTab] = useState('pos'); // 'pos', 'backoffice', 'reports'
   const [editingProduct, setEditingProduct] = useState(null);
   const [newProduct, setNewProduct] = useState({
     name: '',
@@ -44,14 +48,19 @@ export default function AdminPanel() {
   });
   const fileInputRef = useRef(null);
   const [currentUser, setCurrentUser] = useState(null);
+  const [importStatus, setImportStatus] = useState({ show: false, message: '', error: false });
+  const [lowStockItems, setLowStockItems] = useState([]);
+  const [salesReport, setSalesReport] = useState([]);
+  const [reportPeriod, setReportPeriod] = useState('today');
 
   // Cek autentikasi admin
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return router.push('/');
       
-      const userDoc = await getDoc(doc(db, 'users', user.uid));
-      if (!userDoc.exists() || userDoc.data().role !== 'admin') {
+      const userDoc = await doc(db, 'users', user.uid);
+      const userData = await getDoc(userDoc);
+      if (!userData.exists() || userData.data().role !== 'admin') {
         alert('Akses ditolak!');
         router.push('/');
       } else {
@@ -61,7 +70,7 @@ export default function AdminPanel() {
     return () => unsubscribe();
   }, []);
 
-  // Muat produk dari Firestore
+  // Muat produk
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -70,6 +79,12 @@ export default function AdminPanel() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Cek stok rendah
+  useEffect(() => {
+    const lowStock = products.filter(p => (p.stock || 0) < 10);
+    setLowStockItems(lowStock);
+  }, [products]);
 
   // Filter produk
   useEffect(() => {
@@ -85,7 +100,38 @@ export default function AdminPanel() {
     setFilteredProducts(filtered);
   }, [searchTerm, selectedCategory, products]);
 
-  // Format Rupiah
+  // Muat laporan penjualan
+  useEffect(() => {
+    if (activeTab !== 'reports' || !currentUser) return;
+    
+    const loadSalesReport = async () => {
+      const now = new Date();
+      let startDate;
+      
+      switch(reportPeriod) {
+        case 'today':
+          startDate = new Date(now.setHours(0,0,0,0));
+          break;
+        case 'week':
+          startDate = new Date(now.setDate(now.getDate() - 7));
+          break;
+        case 'month':
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+          break;
+      }
+
+      const q = query(
+        collection(db, 'orders'),
+        where('createdAt', '>=', startDate)
+      );
+      const snapshot = await getDocs(q);
+      const orders = snapshot.docs.map(doc => doc.data());
+      setSalesReport(orders);
+    };
+
+    loadSalesReport();
+  }, [reportPeriod, activeTab, currentUser]);
+
   const formatRupiah = (number) => {
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
@@ -94,11 +140,8 @@ export default function AdminPanel() {
     }).format(number);
   };
 
-  // Hitung total keranjang
   const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-  // Tambah ke keranjang
   const addToCart = (product) => {
     const existingItem = cart.find(item => item.id === product.id);
     if (existingItem) {
@@ -112,7 +155,6 @@ export default function AdminPanel() {
     }
   };
 
-  // Update jumlah
   const updateQuantity = (id, newQuantity) => {
     if (newQuantity === 0) {
       removeFromCart(id);
@@ -123,95 +165,174 @@ export default function AdminPanel() {
     ));
   };
 
-  // Hapus dari keranjang
   const removeFromCart = (id) => {
     setCart(cart.filter(item => item.id !== id));
   };
 
-  // Kosongkan keranjang
   const clearCart = () => {
     setCart([]);
   };
 
-  // Proses pembayaran
+  // Generate nomor struk unik per hari
+  const generateReceiptNumber = () => {
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0].replace(/-/g, '');
+    const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '');
+    return `TK${dateStr}-${timeStr}`;
+  };
+
+  // Proses pembayaran + update stok
   const processPayment = async () => {
     if (selectedPaymentMethod === 'cash') {
       const cash = parseFloat(cashReceived);
       if (isNaN(cash) || cash < cartTotal) {
-        alert('Silakan masukkan jumlah uang tunai yang cukup');
+        alert('Uang tunai tidak cukup!');
         return;
       }
     }
 
-    const receipt = {
-      id: `REC-${Date.now()}`,
-      date: new Date().toLocaleString('id-ID'),
-      items: [...cart],
-      subtotal: cartTotal,
-      tax: cartTotal * 0.11, // PPN 11%
-      total: cartTotal * 1.11,
-      paymentMethod: selectedPaymentMethod,
-      change: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) - (cartTotal * 1.11) : 0,
-      cashier: currentUser.email
-    };
+    const now = new Date();
+    const receiptNumber = generateReceiptNumber();
 
-    // Simpan ke Firestore
     try {
+      const batch = writeBatch(db);
+      const orderItems = [];
+
+      // Kurangi stok
+      for (const item of cart) {
+        const productRef = doc(db, 'products', item.id);
+        batch.update(productRef, { stock: increment(-item.quantity) });
+        orderItems.push({
+          id: item.id,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          imageUrl: item.imageUrl
+        });
+      }
+
+      // Simpan order
       await addDoc(collection(db, 'orders'), {
-        ...receipt,
-        createdAt: new Date()
+        id: receiptNumber,
+        date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        items: orderItems,
+        subtotal: cartTotal,
+        tax: cartTotal * 0.11,
+        total: cartTotal * 1.11,
+        paymentMethod: selectedPaymentMethod,
+        change: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) - (cartTotal * 1.11) : 0,
+        cashier: currentUser.email,
+        cashReceived: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) : cartTotal * 1.11,
+        createdAt: now,
+        storeName: "ATAYATOKO",
+        storeAddress: "Jl. Raya Utama No. 123",
+        storePhone: "(021) 1234-5678"
       });
+
+      await batch.commit();
+
+      const receipt = {
+        id: receiptNumber,
+        date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        items: orderItems,
+        subtotal: cartTotal,
+        tax: cartTotal * 0.11,
+        total: cartTotal * 1.11,
+        paymentMethod: selectedPaymentMethod,
+        change: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) - (cartTotal * 1.11) : 0,
+        cashier: currentUser.email,
+        cashReceived: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) : cartTotal * 1.11,
+        storeName: "ATAYATOKO",
+        storeAddress: "Jl. Raya Utama No. 123",
+        storePhone: "(021) 1234-5678"
+      };
+
       setReceiptData(receipt);
       setIsPaymentModalOpen(false);
       setIsReceiptModalOpen(true);
       clearCart();
       setCashReceived('');
     } catch (err) {
-      console.error('Error saving order:', err);
-      alert('Gagal menyimpan transaksi!');
+      console.error('Error:', err);
+      alert('Gagal memproses transaksi!');
     }
   };
 
   // Cetak struk
   const printReceipt = () => {
-    window.print();
+    if (!receiptData) return;
+    
+    const commands = `
+\x1B\x40
+\x1B\x61\x01
+${receiptData.storeName}
+${receiptData.storeAddress}
+Telp: ${receiptData.storePhone}
+------------------------
+${receiptData.date} ${receiptData.time}
+No. Struk: ${receiptData.id}
+Kasir: ${receiptData.cashier}
+------------------------
+Barang        Qty  Total
+------------------------
+${receiptData.items.map(item => 
+  `${item.name.substring(0, 15).padEnd(15)} ${item.quantity.toString().padStart(3)} ${formatRupiah(item.price * item.quantity).replace('Rp', '').replace(/\s/g, '').padStart(8)}`
+).join('\n')}
+------------------------
+SUBTOTAL      ${formatRupiah(receiptData.subtotal).replace('Rp', '').replace(/\s/g, '').padStart(12)}
+PPN 11%       ${formatRupiah(receiptData.tax).replace('Rp', '').replace(/\s/g, '').padStart(12)}
+TOTAL         ${formatRupiah(receiptData.total).replace('Rp', '').replace(/\s/g, '').padStart(12)}
+------------------------
+BAYAR         ${formatRupiah(
+  receiptData.paymentMethod === 'cash' 
+    ? parseFloat(receiptData.cashReceived || 0) 
+    : receiptData.total
+).replace('Rp', '').replace(/\s/g, '').padStart(12)}
+KEMBALI       ${formatRupiah(receiptData.change).replace('Rp', '').replace(/\s/g, '').padStart(12)}
+------------------------
+TERIMA KASIH
+${receiptData.storeName}
+\x1D\x56\x41\x10
+    `.trim();
+
+    if (window.thermalPrinter) {
+      window.thermalPrinter.printText(commands);
+    } else {
+      window.print();
+    }
   };
 
-  // Edit produk
   const handleEditProduct = (product) => {
     setEditingProduct({ ...product });
   };
 
-  // Simpan perubahan produk
   const handleSaveProduct = async () => {
     if (editingProduct) {
       try {
         await updateDoc(doc(db, 'products', editingProduct.id), editingProduct);
         setEditingProduct(null);
       } catch (err) {
-        console.error('Error update product:', err);
         alert('Gagal mengupdate produk!');
       }
     }
   };
 
-  // Hapus produk
   const handleDeleteProduct = async (id) => {
-    if (window.confirm('Apakah Anda yakin ingin menghapus produk ini?')) {
+    if (window.confirm('Hapus produk ini?')) {
       try {
         await deleteDoc(doc(db, 'products', id));
       } catch (err) {
-        console.error('Error delete product:', err);
         alert('Gagal menghapus produk!');
       }
     }
   };
 
-  // Tambah produk baru
   const handleAddProduct = async () => {
     if (newProduct.name && (newProduct.priceEcer || newProduct.priceGrosir)) {
       try {
-        const docRef = await addDoc(collection(db, 'products'), {
+        await addDoc(collection(db, 'products'), {
           ...newProduct,
           hargaBeli: parseFloat(newProduct.hargaBeli) || 0,
           priceEcer: parseFloat(newProduct.priceEcer) || 0,
@@ -230,31 +351,123 @@ export default function AdminPanel() {
           imageUrl: ''
         });
       } catch (err) {
-        console.error('Error add product:', err);
-        alert('Gagal menambahkan produk!');
+        alert('Gagal menambah produk!');
       }
     }
   };
 
-  // Import Excel (placeholder)
-  const importFromExcel = () => {
-    alert('Fitur import Excel akan diimplementasikan dengan SheetJS');
+  // ✅ IMPORT EXCEL DENGAN SHEETJS
+  const handleImportExcel = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'].includes(file.type)) {
+      setImportStatus({
+        show: true,
+        message: 'Format file tidak didukung. Gunakan .xlsx atau .xls',
+        error: true
+      });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+        if (jsonData.length === 0) {
+          throw new Error('File Excel kosong!');
+        }
+
+        const requiredColumns = ['nama', 'harga_ecer', 'stok'];
+        const missingColumns = requiredColumns.filter(col => !jsonData[0].hasOwnProperty(col));
+        if (missingColumns.length > 0) {
+          throw new Error(`Kolom wajib tidak ditemukan: ${missingColumns.join(', ')}`);
+        }
+
+        const batch = writeBatch(db);
+        let count = 0;
+
+        for (const row of jsonData) {
+          const product = {
+            name: String(row.nama || row.name || '').trim(),
+            hargaBeli: Number(row.harga_beli) || 0,
+            priceEcer: Number(row.harga_ecer) || 0,
+            priceGrosir: Number(row.harga_grosir) || 0,
+            stock: Number(row.stok) || 0,
+            supplier: String(row.supplier || '').trim(),
+            category: String(row.kategori || row.category || 'makanan').toLowerCase(),
+            imageUrl: String(row.foto || row.imageUrl || ''),
+            createdAt: new Date()
+          };
+
+          if (!product.name) continue;
+
+          const docRef = doc(collection(db, 'products'));
+          batch.set(docRef, product);
+          count++;
+        }
+
+        if (count === 0) {
+          throw new Error('Tidak ada data produk valid untuk diimpor!');
+        }
+
+        await batch.commit();
+        
+        setImportStatus({
+          show: true,
+          message: `Berhasil mengimpor ${count} produk!`,
+          error: false
+        });
+
+        e.target.value = '';
+        setTimeout(() => setImportStatus({ show: false, message: '', error: false }), 3000);
+
+      } catch (err) {
+        console.error('Import error:', err);
+        setImportStatus({
+          show: true,
+          message: `Gagal mengimpor: ${err.message}`,
+          error: true
+        });
+        e.target.value = '';
+      }
+    };
+    reader.readAsArrayBuffer(file);
   };
 
-  // Export Excel (placeholder)
-  const exportToExcel = () => {
-    alert('Fitur export Excel akan diimplementasikan');
+  // Ekspor laporan
+  const exportSalesReport = () => {
+    const data = salesReport.map(order => ({
+      'Tanggal': order.date,
+      'Jam': order.time,
+      'No. Struk': order.id,
+      'Kasir': order.cashier,
+      'Total': order.total,
+      'Metode Bayar': order.paymentMethod
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Laporan Penjualan");
+    XLSX.writeFile(wb, `laporan_penjualan_${reportPeriod}.xlsx`);
   };
 
-  // Kategori produk
   const categories = ['all', 'makanan', 'minuman', 'kebersihan', 'perawatan'];
-
-  // Metode pembayaran
   const paymentMethods = [
     { id: 'cash', name: 'Tunai', icon: 'fas fa-money-bill-wave' },
     { id: 'card', name: 'Kartu Kredit', icon: 'fas fa-credit-card' },
     { id: 'e-wallet', name: 'E-Wallet', icon: 'fas fa-wallet' }
   ];
+
+  // Hitung statistik laporan
+  const totalSales = salesReport.reduce((sum, order) => sum + order.total, 0);
+  const totalOrders = salesReport.length;
+  const avgOrder = totalOrders > 0 ? totalSales / totalOrders : 0;
 
   if (!currentUser) return <div className="p-6">Loading...</div>;
 
@@ -264,6 +477,8 @@ export default function AdminPanel() {
         <title>ATAYATOKO - Admin POS</title>
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+        {/* ✅ SHEETJS CDN */}
+        <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
         <style>{`
           body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
           @media print {
@@ -273,6 +488,15 @@ export default function AdminPanel() {
           }
         `}</style>
       </Head>
+
+      {/* Notifikasi Import */}
+      {importStatus.show && (
+        <div className={`fixed top-24 right-6 p-4 rounded-lg shadow-lg z-50 ${
+          importStatus.error ? 'bg-red-100 border-l-4 border-red-500 text-red-700' : 'bg-green-100 border-l-4 border-green-500 text-green-700'
+        }`}>
+          <p className="font-medium">{importStatus.message}</p>
+        </div>
+      )}
 
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
@@ -303,7 +527,20 @@ export default function AdminPanel() {
                     : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                Back Office
+                Produk
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('reports');
+                  // Laporan akan dimuat via useEffect
+                }}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  activeTab === 'reports'
+                    ? 'bg-white text-indigo-700 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Laporan
               </button>
             </div>
             <div className="text-right hidden sm:block">
@@ -320,11 +557,18 @@ export default function AdminPanel() {
         </div>
       </header>
 
-      {activeTab === 'pos' ? (
+      {/* Notifikasi Stok Rendah */}
+      {activeTab === 'pos' && lowStockItems.length > 0 && (
+        <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 mx-6">
+          <p className="font-bold">⚠️ Stok Rendah!</p>
+          <p>{lowStockItems.length} produk perlu restok segera.</p>
+        </div>
+      )}
+
+      {activeTab === 'pos' && (
+        // ... (UI POS sama seperti sebelumnya)
         <div className="flex">
-          {/* Left Panel - Products */}
           <div className="w-full lg:w-2/3 xl:w-3/4 p-6">
-            {/* Search and Categories */}
             <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
               <div className="flex flex-col sm:flex-row gap-4 mb-6">
                 <div className="relative flex-1">
@@ -354,7 +598,6 @@ export default function AdminPanel() {
                 </div>
               </div>
 
-              {/* Products Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {filteredProducts.map(product => (
                   <div
@@ -382,7 +625,6 @@ export default function AdminPanel() {
             </div>
           </div>
 
-          {/* Right Panel - Cart */}
           <div className="w-full lg:w-1/3 xl:w-1/4 p-6">
             <div className="bg-white rounded-xl shadow-sm p-6 sticky top-6">
               <div className="flex items-center justify-between mb-6">
@@ -401,7 +643,6 @@ export default function AdminPanel() {
                 <div className="text-center py-12">
                   <i className="fas fa-shopping-cart text-3xl text-gray-400 mb-4"></i>
                   <p className="text-gray-500">Keranjang belanja kosong</p>
-                  <p className="text-sm text-gray-400 mt-2">Tambahkan produk</p>
                 </div>
               ) : (
                 <>
@@ -471,31 +712,39 @@ export default function AdminPanel() {
             </div>
           </div>
         </div>
-      ) : (
-        /* Back Office */
+      )}
+
+      {activeTab === 'backoffice' && (
         <div className="p-6">
           <div className="bg-white rounded-xl shadow-sm p-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
               <h2 className="text-2xl font-bold text-gray-900 mb-4 sm:mb-0">Manajemen Produk</h2>
               <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
                 <button
-                  onClick={exportToExcel}
+                  onClick={exportSalesReport}
                   className="flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
                 >
                   <i className="fas fa-file-download mr-2"></i>
                   Export Excel
                 </button>
-                <button
-                  onClick={importFromExcel}
-                  className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
+                {/* ✅ TOMBOL IMPORT EXCEL */}
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={handleImportExcel}
+                  className="hidden"
+                  id="importExcel"
+                />
+                <label
+                  htmlFor="importExcel"
+                  className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors cursor-pointer"
                 >
                   <i className="fas fa-file-upload mr-2"></i>
                   Import Excel
-                </button>
+                </label>
               </div>
             </div>
 
-            {/* Add New Product Form */}
             <div className="border border-gray-200 rounded-xl p-6 mb-6 bg-gray-50">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Tambah Produk Baru</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -567,7 +816,6 @@ export default function AdminPanel() {
               </button>
             </div>
 
-            {/* Products Table */}
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -690,6 +938,83 @@ export default function AdminPanel() {
         </div>
       )}
 
+      {activeTab === 'reports' && (
+        <div className="p-6">
+          <div className="bg-white rounded-xl shadow-sm p-6">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Laporan Penjualan</h2>
+            
+            <div className="flex gap-4 mb-6">
+              {['today', 'week', 'month'].map(period => (
+                <button
+                  key={period}
+                  onClick={() => setReportPeriod(period)}
+                  className={`px-4 py-2 rounded-lg ${
+                    reportPeriod === period
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  {period === 'today' ? 'Hari Ini' : 
+                   period === 'week' ? '7 Hari' : '30 Hari'}
+                </button>
+              ))}
+              <button
+                onClick={exportSalesReport}
+                className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center"
+              >
+                <i className="fas fa-file-excel mr-2"></i>
+                Ekspor ke Excel
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+              <div className="bg-green-50 p-4 rounded-lg">
+                <h3 className="text-gray-600">Total Penjualan</h3>
+                <p className="text-2xl font-bold text-green-700">{formatRupiah(totalSales)}</p>
+              </div>
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <h3 className="text-gray-600">Jumlah Transaksi</h3>
+                <p className="text-2xl font-bold text-blue-700">{totalOrders}</p>
+              </div>
+              <div className="bg-purple-50 p-4 rounded-lg">
+                <h3 className="text-gray-600">Rata-rata/Transaksi</h3>
+                <p className="text-2xl font-bold text-purple-700">
+                  {totalOrders > 0 ? formatRupiah(avgOrder) : 'Rp 0'}
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-gray-50">
+                    <th className="text-left p-3">No. Struk</th>
+                    <th className="text-left p-3">Tanggal</th>
+                    <th className="text-left p-3">Kasir</th>
+                    <th className="text-right p-3">Total</th>
+                    <th className="text-left p-3">Metode</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {salesReport.map(order => (
+                    <tr key={order.id} className="border-b hover:bg-gray-50">
+                      <td className="p-3 font-mono">{order.id}</td>
+                      <td className="p-3">{order.date} {order.time}</td>
+                      <td className="p-3">{order.cashier}</td>
+                      <td className="p-3 text-right font-medium">{formatRupiah(order.total)}</td>
+                      <td className="p-3">
+                        {order.paymentMethod === 'cash' ? 'Tunai' : 
+                         order.paymentMethod === 'card' ? 'Kartu' : 'E-Wallet'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Payment Modal */}
       {isPaymentModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -779,57 +1104,67 @@ export default function AdminPanel() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 relative" id="receipt">
             <div className="text-center">
-              <div className="border-b-2 border-gray-300 pb-4 mb-4">
-                <h2 className="text-xl font-bold text-gray-900">STRUK PEMBAYARAN</h2>
-                <p className="text-sm text-gray-600 mt-1">Terima kasih atas pembelian Anda!</p>
+              <div className="border-b-2 border-gray-300 pb-2 mb-3">
+                <h2 className="text-lg font-bold">{receiptData.storeName}</h2>
+                <p className="text-xs">{receiptData.storeAddress}</p>
+                <p className="text-xs">Telp: {receiptData.storePhone}</p>
               </div>
               
-              <div className="text-left mb-4">
-                <p className="text-sm text-gray-600">No. Struk: {receiptData.id}</p>
-                <p className="text-sm text-gray-600">Tanggal: {receiptData.date}</p>
-                <p className="text-sm text-gray-600">Kasir: {receiptData.cashier}</p>
+              <div className="text-xs mb-2">
+                <p>{receiptData.date} {receiptData.time}</p>
+                <p>No. Struk: {receiptData.id}</p>
+                <p>Kasir: {receiptData.cashier}</p>
               </div>
 
-              <div className="border-t border-b border-gray-300 py-2 mb-4">
+              <div className="border-t border-b border-gray-300 py-1 mb-2 text-xs">
+                <div className="flex justify-between font-bold mb-1">
+                  <span>Barang</span>
+                  <span className="flex gap-4">
+                    <span>Qty</span>
+                    <span>Total</span>
+                  </span>
+                </div>
                 {receiptData.items.map(item => (
-                  <div key={item.id} className="flex justify-between text-sm mb-1">
-                    <span>{item.name} x{item.quantity}</span>
-                    <span>{formatRupiah(item.price * item.quantity)}</span>
+                  <div key={item.id} className="flex justify-between mb-0.5">
+                    <span>{item.name.substring(0, 18)}</span>
+                    <span className="flex gap-4">
+                      <span>{item.quantity}</span>
+                      <span>{formatRupiah(item.price * item.quantity)}</span>
+                    </span>
                   </div>
                 ))}
               </div>
 
-              <div className="text-left space-y-1 mb-4">
+              <div className="text-xs space-y-0.5 mb-2">
                 <div className="flex justify-between">
-                  <span>Subtotal:</span>
+                  <span>SUBTOTAL</span>
                   <span>{formatRupiah(receiptData.subtotal)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>PPN (11%):</span>
+                  <span>PPN 11%</span>
                   <span>{formatRupiah(receiptData.tax)}</span>
                 </div>
-                <div className="flex justify-between font-bold text-lg pt-2 border-t border-gray-300">
-                  <span>Total:</span>
+                <div className="flex justify-between font-bold pt-1 border-t border-gray-300">
+                  <span>TOTAL</span>
                   <span>{formatRupiah(receiptData.total)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Metode Bayar:</span>
-                  <span>
-                    {paymentMethods.find(m => m.id === receiptData.paymentMethod)?.name || receiptData.paymentMethod}
-                  </span>
+                  <span>BAYAR</span>
+                  <span>{
+                    receiptData.paymentMethod === 'cash' 
+                      ? formatRupiah(parseFloat(receiptData.cashReceived || 0)) 
+                      : formatRupiah(receiptData.total)
+                  }</span>
                 </div>
-                {receiptData.change > 0 && (
-                  <div className="flex justify-between text-green-600">
-                    <span>Kembalian:</span>
-                    <span>{formatRupiah(receiptData.change)}</span>
-                  </div>
-                )}
+                <div className="flex justify-between text-green-600">
+                  <span>KEMBALI</span>
+                  <span>{formatRupiah(receiptData.change)}</span>
+                </div>
               </div>
 
-              <div className="text-sm text-gray-600">
-                <p>Selamat berbelanja kembali!</p>
-                <p className="mt-2">ATAYATOKO</p>
-                <p>Jl. Raya Utama No. 123</p>
+              <div className="text-xs text-gray-600 mt-2">
+                <p>TERIMA KASIH</p>
+                <p>{receiptData.storeName}</p>
               </div>
             </div>
 
