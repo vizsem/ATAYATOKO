@@ -7,7 +7,7 @@ import {
   doc,
   setDoc,
   getDoc,
-  getDocs // ✅ diganti dari onSnapshot ke getDocs
+  getDocs // ✅ Hanya getDocs, bukan onSnapshot
 } from 'firebase/firestore';
 import {
   createUserWithEmailAndPassword,
@@ -17,18 +17,26 @@ import {
 } from 'firebase/auth';
 import { auth, db } from '../lib/firebase';
 
-// 🌐 ISR: Data diambil di server, di-cache 5 menit
+// 🔥 ISR: Ambil data di server, konversi Timestamp agar aman
 export async function getStaticProps() {
   try {
     const snapshot = await getDocs(collection(db, 'products'));
-    const products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const products = snapshot.docs.map(doc => {
+      const data = doc.data();
+      // ✅ Konversi Timestamp ke string ISO (wajib untuk Vercel)
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.().toISOString?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.().toISOString?.() || data.updatedAt,
+      };
+    });
 
     return {
       props: {
         products
       },
-      // 💡 Regenerate setiap 300 detik (5 menit)
-      revalidate: 300
+      revalidate: 300 // Regenerate setiap 5 menit
     };
   } catch (error) {
     console.error('ISR Error:', error);
@@ -36,6 +44,7 @@ export async function getStaticProps() {
   }
 }
 
+// ✅ Terima products dari props
 export default function Home({ products }) {
   const router = useRouter();
   const [cart, setCart] = useState([]);
@@ -44,14 +53,14 @@ export default function Home({ products }) {
   const [activeCategory, setActiveCategory] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState(''); // ✅ State pencarian
+  const [searchTerm, setSearchTerm] = useState(''); // ✅ Pencarian
 
-  // ✅ Kategori termasuk "Snack"
+  // ✅ Kategori dengan Snack
   const categories = [
     { id: 'all', name: 'Semua' },
     { id: 'promo', name: 'Promo' },
     { id: 'makanan', name: 'Makanan' },
-    { id: 'snack', name: 'Snack' }, // ✅ Ditambahkan
+    { id: 'snack', name: 'Snack' }, // ✅ Baru
     { id: 'minuman', name: 'Minuman' },
     { id: 'kebersihan', name: 'Kebersihan' },
     { id: 'perawatan', name: 'Perawatan' }
@@ -59,7 +68,6 @@ export default function Home({ products }) {
 
   const PRODUCTS_PER_PAGE = 12;
 
-  // Format Rupiah
   const formatRupiah = (angka) => {
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
@@ -172,7 +180,6 @@ export default function Home({ products }) {
     waMessage += `\nTotal: ${formatRupiah(cart.reduce((sum, item) => sum + (item.price * item.quantity), 0))}`;
     if (currentUser) waMessage += `\n\nEmail: ${currentUser.email}`;
     const waNumber = '6285790565666';
-    // ✅ Perbaiki spasi di URL
     window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`, '_blank');
   };
 
@@ -180,12 +187,10 @@ export default function Home({ products }) {
   const getFilteredProducts = () => {
     let filtered = products;
 
-    // Filter kategori
     if (activeCategory !== 'all') {
       filtered = filtered.filter(p => p.category === activeCategory);
     }
 
-    // Filter pencarian
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(p =>
@@ -234,7 +239,7 @@ export default function Home({ products }) {
         `}</style>
       </Head>
 
-      {/* === MODALS === */}
+      {/* MODALS (tidak diubah) */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white p-6 rounded-lg w-full max-w-xs sm:max-w-md">
@@ -327,7 +332,7 @@ export default function Home({ products }) {
         </div>
       )}
 
-      {/* === HEADER === */}
+      {/* HEADER */}
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center space-x-2">
@@ -382,7 +387,6 @@ export default function Home({ products }) {
           </div>
         </div>
 
-        {/* Mobile Menu */}
         {isMenuOpen && (
           <div className="md:hidden bg-white py-3 px-4 shadow-lg border-t">
             <button 
@@ -425,7 +429,7 @@ export default function Home({ products }) {
         )}
       </header>
 
-      {/* === HERO === */}
+      {/* HERO */}
       <section className="hero-gradient text-white py-12 sm:py-16 md:py-20">
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-4">ATAYATOKO</h2>
@@ -438,7 +442,7 @@ export default function Home({ products }) {
         </div>
       </section>
 
-      {/* === ROLE === */}
+      {/* ROLE */}
       <section className="py-6 sm:py-8 bg-gray-100">
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-xl sm:text-2xl font-bold mb-4">Pilih Role Anda</h2>
@@ -467,10 +471,10 @@ export default function Home({ products }) {
         </div>
       </section>
 
-      {/* === CATEGORIES + SEARCH === */}
+      {/* CATEGORIES + SEARCH */}
       <section className="py-6 sm:py-8 bg-gray-100">
         <div className="container mx-auto px-4">
-          {/* ✅ Pencarian */}
+          {/* ✅ PENCARIAN */}
           <div className="mb-4 max-w-2xl mx-auto">
             <div className="relative">
               <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
@@ -481,7 +485,7 @@ export default function Home({ products }) {
                 value={searchTerm}
                 onChange={(e) => {
                   setSearchTerm(e.target.value);
-                  setCurrentPage(1); // Reset ke halaman 1 saat cari
+                  setCurrentPage(1);
                 }}
               />
             </div>
@@ -495,7 +499,7 @@ export default function Home({ products }) {
                 onClick={() => {
                   setActiveCategory(cat.id);
                   setCurrentPage(1);
-                  setSearchTerm(''); // Kosongkan pencarian saat ganti kategori
+                  setSearchTerm('');
                   setIsMenuOpen(false);
                 }}
                 className={`px-3 py-1.5 sm:px-5 sm:py-2 rounded-full border font-medium text-xs sm:text-sm ${
@@ -511,7 +515,7 @@ export default function Home({ products }) {
         </div>
       </section>
 
-      {/* === PRODUCT DISPLAY === */}
+      {/* PRODUCT DISPLAY */}
       {activeCategory === 'all' ? (
         <div className="py-8 sm:py-10 bg-gray-50">
           <div className="container mx-auto px-4">
@@ -626,7 +630,6 @@ export default function Home({ products }) {
                   })}
                 </div>
 
-                {/* PAGINATION */}
                 {totalPages > 1 && (
                   <div className="flex flex-wrap justify-center mt-6 sm:mt-8 gap-1 sm:gap-2">
                     <button
