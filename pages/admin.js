@@ -59,11 +59,20 @@ export default function AdminPanel() {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [scannerError, setScannerError] = useState('');
 
+  // Format Rupiah BULAT tanpa koma
+  const formatRupiah = (number) => {
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0 // ✅ HILANGKAN DESIMAL
+    }).format(Math.round(number)); // ✅ BULATKAN
+  };
+
   // Cek autentikasi admin
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return router.push('/');
-      
       const userDoc = await getDoc(doc(db, 'users', user.uid));
       if (!userDoc.exists() || userDoc.data().role !== 'admin') {
         alert('Akses ditolak!');
@@ -110,11 +119,9 @@ export default function AdminPanel() {
   // Muat laporan penjualan
   useEffect(() => {
     if (activeTab !== 'reports' || !currentUser) return;
-    
     const loadSalesReport = async () => {
       const now = new Date();
       let startDate;
-      
       switch(reportPeriod) {
         case 'today':
           startDate = new Date(now.setHours(0,0,0,0));
@@ -126,7 +133,6 @@ export default function AdminPanel() {
           startDate = new Date(now.setMonth(now.getMonth() - 1));
           break;
       }
-
       const q = query(
         collection(db, 'orders'),
         where('createdAt', '>=', startDate)
@@ -135,17 +141,8 @@ export default function AdminPanel() {
       const orders = snapshot.docs.map(doc => doc.data());
       setSalesReport(orders);
     };
-
     loadSalesReport();
   }, [reportPeriod, activeTab, currentUser]);
-
-  const formatRupiah = (number) => {
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      minimumFractionDigits: 0
-    }).format(number);
-  };
 
   const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
@@ -180,7 +177,6 @@ export default function AdminPanel() {
     setCart([]);
   };
 
-  // Generate nomor struk unik per hari
   const generateReceiptNumber = () => {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0].replace(/-/g, '');
@@ -188,22 +184,18 @@ export default function AdminPanel() {
     return `TK${dateStr}-${timeStr}`;
   };
 
-  // Generate EAN-13 barcode dari SKU
   const generateBarcode = (sku) => {
     if (!sku) return '';
     const digits = sku.replace(/\D/g, '');
     const base = ('899' + digits).padEnd(12, '0').slice(0, 12);
-    
     let sum = 0;
     for (let i = 0; i < 12; i++) {
       sum += parseInt(base[i]) * (i % 2 === 0 ? 1 : 3);
     }
     const checksum = (10 - (sum % 10)) % 10;
-    
     return base + checksum;
   };
 
-  // Proses pembayaran + update stok
   const processPayment = async () => {
     if (selectedPaymentMethod === 'cash') {
       const cash = parseFloat(cashReceived);
@@ -212,14 +204,11 @@ export default function AdminPanel() {
         return;
       }
     }
-
     const now = new Date();
     const receiptNumber = generateReceiptNumber();
-
     try {
       const batch = writeBatch(db);
       const orderItems = [];
-
       for (const item of cart) {
         const productRef = doc(db, 'products', item.id);
         batch.update(productRef, { stock: increment(-item.quantity) });
@@ -232,44 +221,44 @@ export default function AdminPanel() {
           barcode: item.barcode
         });
       }
+      const totalRounded = Math.round(cartTotal);
+      const changeRounded = selectedPaymentMethod === 'cash' 
+        ? Math.round(parseFloat(cashReceived) - totalRounded) 
+        : 0;
+      const cashReceivedRounded = selectedPaymentMethod === 'cash' 
+        ? Math.round(parseFloat(cashReceived)) 
+        : totalRounded;
 
       await addDoc(collection(db, 'orders'), {
         id: receiptNumber,
         date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
         time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         items: orderItems,
-        subtotal: cartTotal,
-        tax: cartTotal * 0.11,
-        total: cartTotal * 1.11,
+        total: totalRounded,
         paymentMethod: selectedPaymentMethod,
-        change: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) - (cartTotal * 1.11) : 0,
+        change: changeRounded,
         cashier: currentUser.email,
-        cashReceived: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) : cartTotal * 1.11,
+        cashReceived: cashReceivedRounded,
         createdAt: now,
         storeName: "ATAYATOKO",
         storeAddress: "Jl. Raya Utama No. 123",
         storePhone: "(021) 1234-5678"
       });
 
-      await batch.commit();
-
       const receipt = {
         id: receiptNumber,
         date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
         time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         items: orderItems,
-        subtotal: cartTotal,
-        tax: cartTotal * 0.11,
-        total: cartTotal * 1.11,
+        total: totalRounded,
         paymentMethod: selectedPaymentMethod,
-        change: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) - (cartTotal * 1.11) : 0,
+        change: changeRounded,
         cashier: currentUser.email,
-        cashReceived: selectedPaymentMethod === 'cash' ? parseFloat(cashReceived) : cartTotal * 1.11,
+        cashReceived: cashReceivedRounded,
         storeName: "ATAYATOKO",
         storeAddress: "Jl. Raya Utama No. 123",
         storePhone: "(021) 1234-5678"
       };
-
       setReceiptData(receipt);
       setIsPaymentModalOpen(false);
       setIsReceiptModalOpen(true);
@@ -281,10 +270,8 @@ export default function AdminPanel() {
     }
   };
 
-  // Cetak struk
   const printReceipt = () => {
     if (!receiptData) return;
-    
     const commands = `
 \x1B\x40
 \x1B\x61\x01
@@ -302,13 +289,11 @@ ${receiptData.items.map(item =>
   `${item.name.substring(0, 15).padEnd(15)} ${item.quantity.toString().padStart(3)} ${formatRupiah(item.price * item.quantity).replace('Rp', '').replace(/\s/g, '').padStart(8)}`
 ).join('\n')}
 ------------------------
-SUBTOTAL      ${formatRupiah(receiptData.subtotal).replace('Rp', '').replace(/\s/g, '').padStart(12)}
-PPN 11%       ${formatRupiah(receiptData.tax).replace('Rp', '').replace(/\s/g, '').padStart(12)}
 TOTAL         ${formatRupiah(receiptData.total).replace('Rp', '').replace(/\s/g, '').padStart(12)}
 ------------------------
 BAYAR         ${formatRupiah(
   receiptData.paymentMethod === 'cash' 
-    ? parseFloat(receiptData.cashReceived || 0) 
+    ? receiptData.cashReceived 
     : receiptData.total
 ).replace('Rp', '').replace(/\s/g, '').padStart(12)}
 KEMBALI       ${formatRupiah(receiptData.change).replace('Rp', '').replace(/\s/g, '').padStart(12)}
@@ -317,7 +302,6 @@ TERIMA KASIH
 ${receiptData.storeName}
 \x1D\x56\x41\x10
     `.trim();
-
     if (window.thermalPrinter) {
       window.thermalPrinter.printText(commands);
     } else {
@@ -358,15 +342,12 @@ ${receiptData.storeName}
           const timestamp = Date.now().toString(36).toUpperCase();
           sku = `SKU-${timestamp}`;
         }
-        
         const skuExists = products.some(p => p.sku === sku);
         if (skuExists) {
           alert('SKU sudah digunakan!');
           return;
         }
-
         const barcode = newProduct.barcode?.trim() || generateBarcode(sku);
-
         await addDoc(collection(db, 'products'), {
           ...newProduct,
           sku,
@@ -395,11 +376,9 @@ ${receiptData.storeName}
     }
   };
 
-  // ✅ IMPORT EXCEL UNTUK PRODUK
   const handleImportExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     if (!['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'].includes(file.type)) {
       setImportStatus({
         show: true,
@@ -408,7 +387,6 @@ ${receiptData.storeName}
       });
       return;
     }
-
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
@@ -417,18 +395,14 @@ ${receiptData.storeName}
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet);
-
         if (jsonData.length === 0) {
           throw new Error('File Excel kosong!');
         }
-
         const requiredColumns = ['nama', 'harga_ecer', 'stok'];
         const missingColumns = requiredColumns.filter(col => !jsonData[0].hasOwnProperty(col));
         if (missingColumns.length > 0) {
           throw new Error(`Kolom wajib tidak ditemukan: ${missingColumns.join(', ')}`);
         }
-
-        // Cek duplikat SKU di file
         const skusInFile = new Set();
         for (const row of jsonData) {
           const sku = String(row.sku || '').trim() || `SKU-${Date.now().toString(36).toUpperCase()}`;
@@ -437,14 +411,11 @@ ${receiptData.storeName}
           }
           skusInFile.add(sku);
         }
-
         const batch = writeBatch(db);
         let count = 0;
-
         for (const row of jsonData) {
           const sku = String(row.sku || '').trim() || `SKU-${Date.now().toString(36).toUpperCase()}`;
           const barcode = String(row.barcode || '').trim() || generateBarcode(sku);
-          
           const product = {
             name: String(row.nama || row.name || '').trim(),
             hargaBeli: Number(row.harga_beli) || 0,
@@ -458,29 +429,22 @@ ${receiptData.storeName}
             barcode,
             createdAt: new Date()
           };
-
           if (!product.name) continue;
-
           const docRef = doc(collection(db, 'products'));
           batch.set(docRef, product);
           count++;
         }
-
         if (count === 0) {
           throw new Error('Tidak ada data produk valid untuk diimpor!');
         }
-
         await batch.commit();
-        
         setImportStatus({
           show: true,
           message: `Berhasil mengimpor ${count} produk!`,
           error: false
         });
-
         e.target.value = '';
         setTimeout(() => setImportStatus({ show: false, message: '', error: false }), 3000);
-
       } catch (err) {
         console.error('Import error:', err);
         setImportStatus({
@@ -494,7 +458,6 @@ ${receiptData.storeName}
     reader.readAsArrayBuffer(file);
   };
 
-  // ✅ EKSPOR DATA PRODUK
   const exportProducts = () => {
     const data = products.map(product => ({
       'sku': product.sku || '',
@@ -508,22 +471,18 @@ ${receiptData.storeName}
       'supplier': product.supplier || '',
       'foto': product.imageUrl || ''
     }));
-
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Data Produk");
-    
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     for (let C = range.s.c; C <= range.e.c; ++C) {
       const col = XLSX.utils.decode_col(XLSX.utils.encode_col(C));
       ws['!cols'] = ws['!cols'] || [];
       ws['!cols'][C] = { wch: 15 };
     }
-    
     XLSX.writeFile(wb, "produk_atayatoko.xlsx");
   };
 
-  // ✅ EKSPOR LAPORAN PENJUALAN
   const exportSalesReport = () => {
     const data = salesReport.map(order => ({
       'No. Struk': order.id || '',
@@ -536,38 +495,31 @@ ${receiptData.storeName}
         order.paymentMethod === 'card' ? 'Kartu Kredit' : 'E-Wallet',
       'Item': order.items?.map(i => `${i.name} x${i.quantity}`).join('; ') || ''
     }));
-
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Laporan Penjualan");
-    
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     for (let C = range.s.c; C <= range.e.c; ++C) {
       const col = XLSX.utils.decode_col(XLSX.utils.encode_col(C));
       ws['!cols'] = ws['!cols'] || [];
       ws['!cols'][C] = { wch: 18 };
     }
-    
     XLSX.writeFile(wb, `laporan_penjualan_${reportPeriod}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  // ✅ EDIT MASSAL
   const handleMassUpdate = async () => {
     if (selectedProducts.length === 0) {
       alert('Pilih minimal 1 produk!');
       return;
     }
-
     const updates = {};
     if (massUpdate.priceEcer !== '') updates.priceEcer = parseFloat(massUpdate.priceEcer);
     if (massUpdate.priceGrosir !== '') updates.priceGrosir = parseFloat(massUpdate.priceGrosir);
     if (massUpdate.stock !== '') updates.stock = parseInt(massUpdate.stock);
-
     if (Object.keys(updates).length === 0) {
       alert('Isi minimal 1 field untuk update!');
       return;
     }
-
     try {
       const batch = writeBatch(db);
       selectedProducts.forEach(id => {
@@ -575,7 +527,6 @@ ${receiptData.storeName}
         batch.update(productRef, updates);
       });
       await batch.commit();
-      
       alert(`Berhasil update ${selectedProducts.length} produk!`);
       setSelectedProducts([]);
       setMassUpdate({ priceEcer: '', priceGrosir: '', stock: '' });
@@ -584,7 +535,6 @@ ${receiptData.storeName}
     }
   };
 
-  // ✅ TOGGLE SELECT PRODUK
   const toggleSelectProduct = (id) => {
     setSelectedProducts(prev => 
       prev.includes(id) 
@@ -593,11 +543,9 @@ ${receiptData.storeName}
     );
   };
 
-  // ✅ START SCANNER
   const startScanner = () => {
     setIsScannerOpen(true);
     setScannerError('');
-    
     const html5QrCode = new Html5Qrcode("barcode-scanner");
     html5QrCode.start(
       { facingMode: "environment" },
@@ -617,16 +565,13 @@ ${receiptData.storeName}
         html5QrCode.stop();
         setIsScannerOpen(false);
       },
-      (error) => {
-        // Error callback
-      }
+      (error) => {}
     ).catch((err) => {
       setScannerError('Gagal mengakses kamera. Izinkan akses kamera di browser.');
       setIsScannerOpen(false);
     });
   };
 
-  // ✅ STOP SCANNER
   const stopScanner = () => {
     setIsScannerOpen(false);
   };
@@ -648,12 +593,16 @@ ${receiptData.storeName}
     <>
       <Head>
         <title>ATAYATOKO - Admin POS</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link rel="preconnect" href="https://cdn.jsdelivr.net" />
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
         <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
         <style>{`
-          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+          body { font-family: 'Poppins', Tahoma, Geneva, Verdana, sans-serif; }
           @media print {
             body * { visibility: hidden; }
             #receipt, #receipt * { visibility: visible; }
@@ -662,7 +611,6 @@ ${receiptData.storeName}
         `}</style>
       </Head>
 
-      {/* Notifikasi */}
       {importStatus.show && (
         <div className={`fixed top-24 right-6 p-4 rounded-lg shadow-lg z-50 ${
           importStatus.error ? 'bg-red-100 border-l-4 border-red-500 text-red-700' : 'bg-green-100 border-l-4 border-green-500 text-green-700'
@@ -671,65 +619,42 @@ ${receiptData.storeName}
         </div>
       )}
 
-      {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="flex items-center justify-between px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center">
             <div className="bg-indigo-600 p-2 rounded-lg mr-3">
               <i className="fas fa-cash-register text-white text-xl"></i>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900">ATAYATOKO - POS</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">ATAYATOKO - POS</h1>
           </div>
-          <div className="flex items-center space-x-4">
-            {/* ✅ TOMBOL SCAN BARCODE */}
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
             {activeTab === 'pos' && (
               <button
                 onClick={startScanner}
-                className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-full"
+                className="bg-green-600 hover:bg-green-700 text-white p-2.5 rounded-full"
                 title="Scan Barcode"
               >
                 <i className="fas fa-barcode"></i>
               </button>
             )}
-            <div className="flex bg-gray-100 rounded-lg p-1">
-              <button
-                onClick={() => setActiveTab('pos')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                  activeTab === 'pos'
-                    ? 'bg-white text-indigo-700 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                POS
-              </button>
-              <button
-                onClick={() => setActiveTab('backoffice')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                  activeTab === 'backoffice'
-                    ? 'bg-white text-indigo-700 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Produk
-              </button>
-              <button
-                onClick={() => setActiveTab('reports')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                  activeTab === 'reports'
-                    ? 'bg-white text-indigo-700 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Laporan
-              </button>
-            </div>
-            <div className="text-right hidden sm:block">
-              <p className="text-sm font-medium text-gray-900">Admin</p>
-              <p className="text-xs text-gray-500">{currentUser.email}</p>
+            <div className="flex bg-gray-100 rounded-lg p-1 text-xs sm:text-sm">
+              {['pos', 'backoffice', 'reports'].map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-md font-medium transition-colors ${
+                    activeTab === tab
+                      ? 'bg-white text-indigo-700 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {tab === 'pos' ? 'POS' : tab === 'backoffice' ? 'Produk' : 'Laporan'}
+                </button>
+              ))}
             </div>
             <button
               onClick={() => signOut(auth).then(() => router.push('/'))}
-              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+              className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap"
             >
               Logout
             </button>
@@ -737,27 +662,24 @@ ${receiptData.storeName}
         </div>
       </header>
 
-      {/* Notifikasi Stok Rendah */}
       {activeTab === 'pos' && lowStockItems.length > 0 && (
-        <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 mx-6">
+        <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 mx-4 sm:mx-6">
           <p className="font-bold">⚠️ Stok Rendah!</p>
           <p>{lowStockItems.length} produk perlu restok segera.</p>
         </div>
       )}
 
-      {/* ... (UI POS tetap sama) ... */}
-
       {activeTab === 'pos' && (
-        <div className="flex">
-          <div className="w-full lg:w-2/3 xl:w-3/4 p-6">
-            <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-              <div className="flex flex-col sm:flex-row gap-4 mb-6">
+        <div className="flex flex-col lg:flex-row">
+          <div className="w-full lg:w-2/3 xl:w-3/4 p-4 sm:p-6">
+            <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mb-6">
+              <div className="flex flex-col sm:flex-row gap-3 mb-4">
                 <div className="relative flex-1">
                   <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
                   <input
                     type="text"
                     placeholder="Cari produk, SKU, atau barcode..."
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2.5 sm:py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-base"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
@@ -767,7 +689,7 @@ ${receiptData.storeName}
                     <button
                       key={category}
                       onClick={() => setSelectedCategory(category)}
-                      className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                      className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-colors ${
                         selectedCategory === category
                           ? 'bg-indigo-600 text-white'
                           : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -778,116 +700,109 @@ ${receiptData.storeName}
                   ))}
                 </div>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                 {filteredProducts.map(product => (
                   <div
                     key={product.id}
-                    className="border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow cursor-pointer bg-white"
+                    className="border border-gray-200 rounded-lg p-3 hover:shadow-md cursor-pointer bg-white"
                     onClick={() => addToCart(product)}
                   >
-                    <div className="flex justify-center mb-3">
+                    <div className="flex justify-center mb-2">
                       <img
                         src={product.imageUrl || '/placeholder.webp'}
                         alt={product.name}
-                        className="w-16 h-16 object-cover rounded-lg"
+                        className="w-12 h-12 sm:w-16 sm:h-16 object-cover rounded"
+                        loading="lazy"
                         onError={(e) => e.target.src = '/placeholder.webp'}
                       />
                     </div>
-                    <h3 className="font-medium text-gray-900 text-center mb-1">{product.name}</h3>
-                    <p className="text-indigo-600 font-bold text-center mb-2">{formatRupiah(product.priceEcer)}</p>
-                    <div className="flex justify-between items-center text-sm text-gray-600">
-                      <span>Stok: {product.stock}</span>
-                      <span className="font-mono text-xs">{product.sku}</span>
+                    <h3 className="text-xs sm:text-sm font-medium text-center mb-1 truncate">{product.name}</h3>
+                    <p className="text-indigo-600 font-bold text-center text-xs sm:text-sm">{formatRupiah(product.priceEcer)}</p>
+                    <div className="text-[10px] sm:text-xs text-gray-600 text-center mt-1">
+                      Stok: {product.stock}
                     </div>
                   </div>
                 ))}
               </div>
             </div>
           </div>
-
-          <div className="w-full lg:w-1/3 xl:w-1/4 p-6">
-            {/* ... (UI keranjang tetap sama) ... */}
-            <div className="bg-white rounded-xl shadow-sm p-6 sticky top-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-gray-900">Keranjang Belanja</h2>
+          <div className="w-full lg:w-1/3 xl:w-1/4 p-4 sm:p-6">
+            <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 sticky top-6">
+              <div className="flex items-center justify-between mb-4 sm:mb-6">
+                <h2 className="text-lg sm:text-xl font-bold text-gray-900">Keranjang</h2>
                 {cart.length > 0 && (
                   <button
                     onClick={clearCart}
-                    className="text-red-600 hover:text-red-800 text-sm font-medium"
+                    className="text-red-600 hover:text-red-800 text-xs sm:text-sm font-medium"
                   >
                     Kosongkan
                   </button>
                 )}
               </div>
-
               {cart.length === 0 ? (
-                <div className="text-center py-12">
-                  <i className="fas fa-shopping-cart text-3xl text-gray-400 mb-4"></i>
-                  <p className="text-gray-500">Keranjang belanja kosong</p>
+                <div className="text-center py-8 sm:py-12">
+                  <i className="fas fa-shopping-cart text-2xl sm:text-3xl text-gray-400 mb-3"></i>
+                  <p className="text-gray-500 text-sm sm:text-base">Keranjang kosong</p>
                 </div>
               ) : (
                 <>
-                  <div className="space-y-4 max-h-96 overflow-y-auto mb-6">
+                  <div className="space-y-3 max-h-80 sm:max-h-96 overflow-y-auto mb-4 sm:mb-6">
                     {cart.map(item => (
-                      <div key={item.id} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                      <div key={item.id} className="flex items-center justify-between p-2.5 sm:p-3 border border-gray-200 rounded-lg">
                         <div className="flex items-center">
                           <img
                             src={item.imageUrl || '/placeholder.webp'}
                             alt={item.name}
-                            className="w-10 h-10 object-cover rounded mr-3"
+                            className="w-9 h-9 sm:w-10 sm:h-10 object-cover rounded mr-2 sm:mr-3"
                             onError={(e) => e.target.src = '/placeholder.webp'}
                           />
                           <div>
-                            <p className="font-medium text-gray-900 text-sm">{item.name}</p>
-                            <p className="text-indigo-600 font-medium">{formatRupiah(item.price)}</p>
+                            <p className="font-medium text-gray-900 text-xs sm:text-sm">{item.name}</p>
+                            <p className="text-indigo-600 font-medium text-xs">{formatRupiah(item.price)}</p>
                           </div>
                         </div>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-1.5">
                           <button
                             onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                            className="p-1 rounded-full bg-gray-200 hover:bg-gray-300"
+                            className="p-1.5 min-w-[32px] min-h-[32px] rounded-full bg-gray-200 hover:bg-gray-300 flex items-center justify-center"
                           >
-                            <i className="fas fa-minus text-xs"></i>
+                            <i className="fas fa-minus text-[10px]"></i>
                           </button>
-                          <span className="font-medium w-8 text-center">{item.quantity}</span>
+                          <span className="font-medium w-7 text-center text-xs">{item.quantity}</span>
                           <button
                             onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                            className="p-1 rounded-full bg-gray-200 hover:bg-gray-300"
+                            className="p-1.5 min-w-[32px] min-h-[32px] rounded-full bg-gray-200 hover:bg-gray-300 flex items-center justify-center"
                           >
-                            <i className="fas fa-plus text-xs"></i>
+                            <i className="fas fa-plus text-[10px]"></i>
                           </button>
                           <button
                             onClick={() => removeFromCart(item.id)}
-                            className="p-1 rounded-full bg-red-100 hover:bg-red-200 ml-2"
+                            className="p-1.5 min-w-[32px] min-h-[32px] rounded-full bg-red-100 hover:bg-red-200 ml-1.5"
                           >
-                            <i className="fas fa-times text-xs text-red-600"></i>
+                            <i className="fas fa-times text-[10px] text-red-600"></i>
                           </button>
                         </div>
                       </div>
                     ))}
                   </div>
-
-                  <div className="border-t border-gray-200 pt-4 space-y-3">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Subtotal:</span>
-                      <span className="font-medium">{formatRupiah(cartTotal)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">PPN (11%):</span>
-                      <span className="font-medium">{formatRupiah(cartTotal * 0.11)}</span>
-                    </div>
-                    <div className="flex justify-between text-lg font-bold border-t border-gray-200 pt-2">
+                  <div className="border-t border-gray-200 pt-3 sm:pt-4 space-y-2">
+                    <div className="flex justify-between text-base font-bold">
                       <span>Total:</span>
-                      <span>{formatRupiah(cartTotal * 1.11)}</span>
+                      <span>{formatRupiah(cartTotal)}</span>
                     </div>
                   </div>
-
                   <button
                     onClick={() => setIsPaymentModalOpen(true)}
-                    className="w-full bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white font-bold py-4 px-6 rounded-xl mt-6 transition-all duration-200 shadow-lg hover:shadow-xl"
+                    disabled={cart.length === 0 || cart.some(item => item.quantity > item.stock)}
+                    className={`w-full py-2.5 sm:py-3 px-4 sm:px-6 rounded-xl font-bold text-sm sm:text-base mt-4 ${
+                      cart.length === 0 || cart.some(item => item.quantity > item.stock)
+                        ? 'bg-gray-400 text-gray-700 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-indigo-600 to-purple-700 text-white hover:from-indigo-700 hover:to-purple-800 shadow-lg'
+                    }`}
                   >
-                    Bayar {formatRupiah(cartTotal * 1.11)}
+                    {cart.some(item => item.quantity > item.stock)
+                      ? 'Stok Tidak Cukup!'
+                      : `Bayar ${formatRupiah(cartTotal)}`}
                   </button>
                 </>
               )}
@@ -897,17 +812,17 @@ ${receiptData.storeName}
       )}
 
       {activeTab === 'backoffice' && (
-        <div className="p-6">
-          <div className="bg-white rounded-xl shadow-sm p-6">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 mb-4 sm:mb-0">Manajemen Produk</h2>
-              <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+        <div className="p-4 sm:p-6">
+          <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6">
+              <h2 className="text-lg sm:text-xl font-bold text-gray-900 mb-3 sm:mb-0">Manajemen Produk</h2>
+              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
                 <button
                   onClick={exportProducts}
-                  className="flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+                  className="flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm"
                 >
-                  <i className="fas fa-file-export mr-2"></i>
-                  Ekspor Produk
+                  <i className="fas fa-file-export mr-1.5 sm:mr-2"></i>
+                  Ekspor
                 </button>
                 <input
                   type="file"
@@ -918,241 +833,147 @@ ${receiptData.storeName}
                 />
                 <label
                   htmlFor="importExcel"
-                  className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors cursor-pointer"
+                  className="flex items-center justify-center bg-green-600 hover:bg-green-700 text-white px-3 py-2 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm cursor-pointer"
                 >
-                  <i className="fas fa-file-import mr-2"></i>
-                  Impor Produk
+                  <i className="fas fa-file-import mr-1.5 sm:mr-2"></i>
+                  Impor
                 </label>
               </div>
             </div>
-
-            <div className="border border-gray-200 rounded-xl p-6 mb-6 bg-gray-50">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Tambah Produk Baru</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                <input
-                  type="text"
-                  placeholder="Nama Produk"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.name}
-                  onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
-                />
-                <input
-                  type="text"
-                  placeholder="SKU (auto-generate jika kosong)"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.sku}
-                  onChange={(e) => setNewProduct({...newProduct, sku: e.target.value})}
-                />
-                <input
-                  type="text"
-                  placeholder="Barcode (opsional)"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.barcode}
-                  onChange={(e) => setNewProduct({...newProduct, barcode: e.target.value})}
-                />
-                <input
-                  type="number"
-                  placeholder="Harga Ecer"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.priceEcer}
-                  onChange={(e) => setNewProduct({...newProduct, priceEcer: e.target.value})}
-                />
-                <input
-                  type="number"
-                  placeholder="Stok"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.stock}
-                  onChange={(e) => setNewProduct({...newProduct, stock: e.target.value})}
-                />
-                <input
-                  type="number"
-                  placeholder="Harga Beli"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.hargaBeli}
-                  onChange={(e) => setNewProduct({...newProduct, hargaBeli: e.target.value})}
-                />
-                <input
-                  type="number"
-                  placeholder="Harga Grosir"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.priceGrosir}
-                  onChange={(e) => setNewProduct({...newProduct, priceGrosir: e.target.value})}
-                />
-                <input
-                  type="text"
-                  placeholder="Supplier"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.supplier}
-                  onChange={(e) => setNewProduct({...newProduct, supplier: e.target.value})}
-                />
-                <select
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.category}
-                  onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
-                >
-                  <option value="makanan">Makanan</option>
-                  <option value="minuman">Minuman</option>
-                  <option value="kebersihan">Kebersihan</option>
-                  <option value="perawatan">Perawatan</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="URL Foto"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.imageUrl}
-                  onChange={(e) => setNewProduct({...newProduct, imageUrl: e.target.value})}
-                />
+            <div className="border border-gray-200 rounded-xl p-4 mb-4 sm:mb-6 bg-gray-50">
+              <h3 className="text-sm sm:text-base font-semibold text-gray-900 mb-3">Tambah Produk Baru</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
+                {[
+                  { key: 'name', placeholder: 'Nama Produk', type: 'text' },
+                  { key: 'sku', placeholder: 'SKU (opsional)', type: 'text' },
+                  { key: 'barcode', placeholder: 'Barcode (opsional)', type: 'text' },
+                  { key: 'priceEcer', placeholder: 'Harga Ecer', type: 'number' },
+                  { key: 'stock', placeholder: 'Stok', type: 'number' },
+                  { key: 'hargaBeli', placeholder: 'Harga Beli', type: 'number' },
+                  { key: 'priceGrosir', placeholder: 'Harga Grosir', type: 'number' },
+                  { key: 'supplier', placeholder: 'Supplier', type: 'text' },
+                  { key: 'category', placeholder: 'Kategori', type: 'select' },
+                  { key: 'imageUrl', placeholder: 'URL Foto', type: 'text' }
+                ].map(({ key, placeholder, type }) => (
+                  type === 'select' ? (
+                    <select
+                      key={key}
+                      className="px-2 py-1.5 sm:px-3 sm:py-2 border border-gray-300 rounded-lg text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                      value={newProduct[key]}
+                      onChange={(e) => setNewProduct({...newProduct, [key]: e.target.value})}
+                    >
+                      <option value="makanan">Makanan</option>
+                      <option value="minuman">Minuman</option>
+                      <option value="kebersihan">Kebersihan</option>
+                      <option value="perawatan">Perawatan</option>
+                    </select>
+                  ) : (
+                    <input
+                      key={key}
+                      type={type}
+                      placeholder={placeholder}
+                      className="px-2 py-1.5 sm:px-3 sm:py-2 border border-gray-300 rounded-lg text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                      value={newProduct[key]}
+                      onChange={(e) => setNewProduct({...newProduct, [key]: e.target.value})}
+                    />
+                  )
+                ))}
               </div>
               <button
                 onClick={handleAddProduct}
-                className="mt-4 bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+                className="mt-3 sm:mt-4 bg-green-600 hover:bg-green-700 text-white px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium"
               >
                 Tambah Produk
               </button>
             </div>
-
-            {/* Tabel Produk dengan SKU & Barcode */}
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="overflow-x-auto -mx-4 px-4">
+              <table className="w-full min-w-[600px] text-xs sm:text-sm">
                 <thead>
                   <tr className="bg-gray-100">
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">
-                      <input
-                        type="checkbox"
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedProducts(products.map(p => p.id));
-                          } else {
-                            setSelectedProducts([]);
-                          }
-                        }}
-                        checked={selectedProducts.length === products.length && products.length > 0}
-                      />
-                    </th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">SKU</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Barcode</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Produk</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Kategori</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Harga Ecer</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Stok</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Aksi</th>
+                    <th className="px-2 py-2 text-left">Pilih</th>
+                    <th className="px-2 py-2 text-left">SKU</th>
+                    <th className="px-2 py-2 text-left">Produk</th>
+                    <th className="px-2 py-2 text-left">Kategori</th>
+                    <th className="px-2 py-2 text-left">Harga</th>
+                    <th className="px-2 py-2 text-left">Stok</th>
+                    <th className="px-2 py-2 text-left">Aksi</th>
                   </tr>
                 </thead>
                 <tbody>
                   {products.map(product => (
                     <tr key={product.id} className="border-b border-gray-200 hover:bg-gray-50">
                       {editingProduct && editingProduct.id === product.id ? (
-                        <>
-                          <td className="px-4 py-3">
-                            <input type="checkbox" disabled />
-                          </td>
-                          <td className="px-4 py-3">
+                        <td colSpan="7" className="px-2 py-2">
+                          <div className="flex items-center space-x-2">
                             <input
                               type="text"
-                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                              value={editingProduct.sku}
-                              onChange={(e) => setEditingProduct({...editingProduct, sku: e.target.value})}
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                              value={editingProduct.barcode}
-                              onChange={(e) => setEditingProduct({...editingProduct, barcode: e.target.value})}
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                              className="px-2 py-1 border rounded text-xs w-24"
                               value={editingProduct.name}
                               onChange={(e) => setEditingProduct({...editingProduct, name: e.target.value})}
                             />
-                          </td>
-                          <td className="px-4 py-3">
-                            <select
-                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                              value={editingProduct.category}
-                              onChange={(e) => setEditingProduct({...editingProduct, category: e.target.value})}
-                            >
-                              <option value="makanan">Makanan</option>
-                              <option value="minuman">Minuman</option>
-                              <option value="kebersihan">Kebersihan</option>
-                              <option value="perawatan">Perawatan</option>
-                            </select>
-                          </td>
-                          <td className="px-4 py-3">
                             <input
                               type="number"
-                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                              className="px-2 py-1 border rounded text-xs w-20"
                               value={editingProduct.priceEcer}
                               onChange={(e) => setEditingProduct({...editingProduct, priceEcer: e.target.value})}
                             />
-                          </td>
-                          <td className="px-4 py-3">
                             <input
                               type="number"
-                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                              className="px-2 py-1 border rounded text-xs w-16"
                               value={editingProduct.stock}
                               onChange={(e) => setEditingProduct({...editingProduct, stock: e.target.value})}
                             />
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex space-x-2">
-                              <button
-                                onClick={handleSaveProduct}
-                                className="p-1 bg-green-600 text-white rounded hover:bg-green-700"
-                              >
-                                <i className="fas fa-save text-xs"></i>
-                              </button>
-                              <button
-                                onClick={() => setEditingProduct(null)}
-                                className="p-1 bg-gray-600 text-white rounded hover:bg-gray-700"
-                              >
-                                <i className="fas fa-undo text-xs"></i>
-                              </button>
-                            </div>
-                          </td>
-                        </>
+                            <button
+                              onClick={handleSaveProduct}
+                              className="p-1 bg-green-600 text-white rounded text-xs"
+                            >
+                              Simpan
+                            </button>
+                            <button
+                              onClick={() => setEditingProduct(null)}
+                              className="p-1 bg-gray-600 text-white rounded text-xs"
+                            >
+                              Batal
+                            </button>
+                          </div>
+                        </td>
                       ) : (
                         <>
-                          <td className="px-4 py-3">
+                          <td className="px-2 py-2">
                             <input
                               type="checkbox"
                               checked={selectedProducts.includes(product.id)}
                               onChange={() => toggleSelectProduct(product.id)}
                             />
                           </td>
-                          <td className="px-4 py-3 text-gray-700 font-mono text-xs">{product.sku}</td>
-                          <td className="px-4 py-3 text-gray-700 font-mono text-xs">{product.barcode || '-'}</td>
-                          <td className="px-4 py-3">
+                          <td className="px-2 py-2 font-mono text-xs">{product.sku || '-'}</td>
+                          <td className="px-2 py-2">
                             <div className="flex items-center">
                               <img
                                 src={product.imageUrl || '/placeholder.webp'}
                                 alt={product.name}
-                                className="w-8 h-8 object-cover rounded mr-3"
+                                className="w-7 h-7 object-cover rounded mr-2"
                                 onError={(e) => e.target.src = '/placeholder.webp'}
                               />
-                              <span className="font-medium text-gray-900">{product.name}</span>
+                              <span className="text-xs">{product.name}</span>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-gray-700">{product.category}</td>
-                          <td className="px-4 py-3 text-indigo-600 font-medium">{formatRupiah(product.priceEcer)}</td>
-                          <td className="px-4 py-3 text-gray-700">{product.stock}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex space-x-2">
+                          <td className="px-2 py-2 text-xs">{product.category}</td>
+                          <td className="px-2 py-2 text-indigo-600 font-medium text-xs">{formatRupiah(product.priceEcer)}</td>
+                          <td className="px-2 py-2 text-xs">{product.stock}</td>
+                          <td className="px-2 py-2">
+                            <div className="flex space-x-1">
                               <button
                                 onClick={() => handleEditProduct(product)}
-                                className="p-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                                className="p-1 bg-blue-600 text-white rounded text-[10px]"
                               >
-                                <i className="fas fa-edit text-xs"></i>
+                                Edit
                               </button>
                               <button
                                 onClick={() => handleDeleteProduct(product.id)}
-                                className="p-1 bg-red-600 text-white rounded hover:bg-red-700"
+                                className="p-1 bg-red-600 text-white rounded text-[10px]"
                               >
-                                <i className="fas fa-trash text-xs"></i>
+                                Hapus
                               </button>
                             </div>
                           </td>
@@ -1163,30 +984,28 @@ ${receiptData.storeName}
                 </tbody>
               </table>
             </div>
-
-            {/* Panel Edit Massal */}
             {selectedProducts.length > 0 && (
-              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <h3 className="font-bold mb-2">Edit Massal ({selectedProducts.length} produk dipilih)</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+              <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <h3 className="font-bold text-xs mb-2">Edit Massal ({selectedProducts.length})</h3>
+                <div className="grid grid-cols-3 gap-2 mb-2">
                   <input
                     type="number"
-                    placeholder="Harga Ecer Baru"
-                    className="px-2 py-1 border rounded"
+                    placeholder="Harga Ecer"
+                    className="px-2 py-1 border rounded text-xs"
                     value={massUpdate.priceEcer}
                     onChange={(e) => setMassUpdate({...massUpdate, priceEcer: e.target.value})}
                   />
                   <input
                     type="number"
-                    placeholder="Harga Grosir Baru"
-                    className="px-2 py-1 border rounded"
+                    placeholder="Harga Grosir"
+                    className="px-2 py-1 border rounded text-xs"
                     value={massUpdate.priceGrosir}
                     onChange={(e) => setMassUpdate({...massUpdate, priceGrosir: e.target.value})}
                   />
                   <input
                     type="number"
-                    placeholder="Stok Baru"
-                    className="px-2 py-1 border rounded"
+                    placeholder="Stok"
+                    className="px-2 py-1 border rounded text-xs"
                     value={massUpdate.stock}
                     onChange={(e) => setMassUpdate({...massUpdate, stock: e.target.value})}
                   />
@@ -1194,13 +1013,13 @@ ${receiptData.storeName}
                 <div className="flex gap-2">
                   <button
                     onClick={handleMassUpdate}
-                    className="bg-blue-600 text-white px-4 py-2 rounded"
+                    className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs"
                   >
-                    Update Massal
+                    Update
                   </button>
                   <button
                     onClick={() => setSelectedProducts([])}
-                    className="bg-gray-600 text-white px-4 py-2 rounded"
+                    className="bg-gray-600 text-white px-3 py-1.5 rounded text-xs"
                   >
                     Batal
                   </button>
@@ -1212,17 +1031,15 @@ ${receiptData.storeName}
       )}
 
       {activeTab === 'reports' && (
-        // ... (UI laporan tetap sama)
-        <div className="p-6">
-          <div className="bg-white rounded-xl shadow-sm p-6">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Laporan Penjualan</h2>
-            
-            <div className="flex gap-4 mb-6">
+        <div className="p-4 sm:p-6">
+          <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900 mb-3 sm:mb-4">Laporan Penjualan</h2>
+            <div className="flex flex-wrap gap-2 mb-4">
               {['today', 'week', 'month'].map(period => (
                 <button
                   key={period}
                   onClick={() => setReportPeriod(period)}
-                  className={`px-4 py-2 rounded-lg ${
+                  className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm ${
                     reportPeriod === period
                       ? 'bg-indigo-600 text-white'
                       : 'bg-gray-100 text-gray-700'
@@ -1234,51 +1051,49 @@ ${receiptData.storeName}
               ))}
               <button
                 onClick={exportSalesReport}
-                className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center"
+                className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm flex items-center"
               >
-                <i className="fas fa-file-excel mr-2"></i>
-                Ekspor Laporan
+                <i className="fas fa-file-excel mr-1.5"></i>
+                Ekspor
               </button>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-              <div className="bg-green-50 p-4 rounded-lg">
-                <h3 className="text-gray-600">Total Penjualan</h3>
-                <p className="text-2xl font-bold text-green-700">{formatRupiah(totalSales)}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-4">
+              <div className="bg-green-50 p-3 rounded-lg">
+                <h3 className="text-xs sm:text-sm text-gray-600">Total Penjualan</h3>
+                <p className="text-base sm:text-lg font-bold text-green-700">{formatRupiah(totalSales)}</p>
               </div>
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <h3 className="text-gray-600">Jumlah Transaksi</h3>
-                <p className="text-2xl font-bold text-blue-700">{totalOrders}</p>
+              <div className="bg-blue-50 p-3 rounded-lg">
+                <h3 className="text-xs sm:text-sm text-gray-600">Transaksi</h3>
+                <p className="text-base sm:text-lg font-bold text-blue-700">{totalOrders}</p>
               </div>
-              <div className="bg-purple-50 p-4 rounded-lg">
-                <h3 className="text-gray-600">Rata-rata/Transaksi</h3>
-                <p className="text-2xl font-bold text-purple-700">
-                  {totalOrders > 0 ? formatRupiah(avgOrder) : 'Rp 0'}
+              <div className="bg-purple-50 p-3 rounded-lg">
+                <h3 className="text-xs sm:text-sm text-gray-600">Rata-rata</h3>
+                <p className="text-base sm:text-lg font-bold text-purple-700">
+                  {totalOrders > 0 ? formatRupiah(avgOrder) : 'Rp0'}
                 </p>
               </div>
             </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div className="overflow-x-auto -mx-4 px-4">
+              <table className="w-full text-xs sm:text-sm min-w-[500px]">
                 <thead>
                   <tr className="border-b bg-gray-50">
-                    <th className="text-left p-3">No. Struk</th>
-                    <th className="text-left p-3">Tanggal</th>
-                    <th className="text-left p-3">Kasir</th>
-                    <th className="text-right p-3">Total</th>
-                    <th className="text-left p-3">Metode</th>
+                    <th className="text-left p-2">No. Struk</th>
+                    <th className="text-left p-2">Tanggal</th>
+                    <th className="text-left p-2">Kasir</th>
+                    <th className="text-right p-2">Total</th>
+                    <th className="text-left p-2">Metode</th>
                   </tr>
                 </thead>
                 <tbody>
                   {salesReport.map(order => (
                     <tr key={order.id} className="border-b hover:bg-gray-50">
-                      <td className="p-3 font-mono">{order.id}</td>
-                      <td className="p-3">{order.date} {order.time}</td>
-                      <td className="p-3">{order.cashier}</td>
-                      <td className="p-3 text-right font-medium">{formatRupiah(order.total)}</td>
-                      <td className="p-3">
+                      <td className="p-2 font-mono text-xs">{order.id}</td>
+                      <td className="p-2 text-xs">{order.date} {order.time}</td>
+                      <td className="p-2 text-xs">{order.cashier}</td>
+                      <td className="p-2 text-right font-medium text-xs">{formatRupiah(order.total)}</td>
+                      <td className="p-2 text-xs">
                         {order.paymentMethod === 'cash' ? 'Tunai' : 
-                         order.paymentMethod === 'card' ? 'Kartu Kredit' : 'E-Wallet'}
+                         order.paymentMethod === 'card' ? 'Kartu' : 'E-Wallet'}
                       </td>
                     </tr>
                   ))}
@@ -1289,150 +1104,108 @@ ${receiptData.storeName}
         </div>
       )}
 
-      {/* Payment Modal */}
       {isPaymentModalOpen && (
-        // ... (modal pembayaran tetap sama)
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold text-gray-900">Pembayaran</h3>
+          <div className="bg-white rounded-xl w-full max-w-xs sm:max-w-md p-5">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-base sm:text-lg">Pembayaran</h3>
               <button
                 onClick={() => setIsPaymentModalOpen(false)}
-                className="p-2 hover:bg-gray-100 rounded-full"
+                className="p-1.5 hover:bg-gray-100 rounded-full"
               >
-                <i className="fas fa-times"></i>
+                <i className="fas fa-times text-sm"></i>
               </button>
             </div>
-
-            <div className="space-y-6">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">Metode Pembayaran</label>
-                <div className="grid grid-cols-3 gap-3">
+                <label className="block text-xs sm:text-sm font-medium mb-2">Metode</label>
+                <div className="grid grid-cols-3 gap-2">
                   {paymentMethods.map(method => (
                     <button
                       key={method.id}
                       onClick={() => setSelectedPaymentMethod(method.id)}
-                      className={`p-4 rounded-xl border-2 transition-all ${
+                      className={`p-2.5 rounded-lg border transition-all text-xs ${
                         selectedPaymentMethod === method.id
                           ? 'border-indigo-500 bg-indigo-50'
                           : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
-                      <i className={`${method.icon} mx-auto mb-2 text-gray-600`}></i>
-                      <span className="text-sm font-medium text-gray-700">{method.name}</span>
+                      <i className={`${method.icon} mx-auto mb-1 text-gray-600 text-sm`}></i>
+                      <span className="text-gray-700">{method.name}</span>
                     </button>
                   ))}
                 </div>
               </div>
-
               {selectedPaymentMethod === 'cash' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Uang Tunai Diterima
-                  </label>
+                  <label className="block text-xs sm:text-sm font-medium mb-2">Uang Tunai</label>
                   <div className="relative">
-                    <i className="fas fa-money-bill-wave absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                    <i className="fas fa-money-bill-wave absolute left-2.5 top-1/2 transform -translate-y-1/2 text-gray-400 text-xs"></i>
                     <input
                       type="number"
-                      className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                      className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-base"
                       value={cashReceived}
                       onChange={(e) => setCashReceived(e.target.value)}
                       placeholder="0"
                     />
                   </div>
                   {cashReceived && (
-                    <div className="mt-2 text-sm text-green-600">
-                      Kembalian: {formatRupiah(parseFloat(cashReceived) - (cartTotal * 1.11))}
+                    <div className="mt-1 text-xs text-green-600">
+                      Kembalian: {formatRupiah(parseFloat(cashReceived) - Math.round(cartTotal))}
                     </div>
                   )}
                 </div>
               )}
-
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="flex justify-between mb-1">
-                  <span className="text-gray-600">Total:</span>
-                  <span className="font-bold">{formatRupiah(cartTotal * 1.11)}</span>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="flex justify-between text-xs">
+                  <span className="font-medium">Total:</span>
+                  <span className="font-bold">{formatRupiah(cartTotal)}</span>
                 </div>
-                {selectedPaymentMethod === 'cash' && cashReceived && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Kembalian:</span>
-                    <span className="text-green-600 font-medium">
-                      {formatRupiah(parseFloat(cashReceived) - (cartTotal * 1.11))}
-                    </span>
-                  </div>
-                )}
               </div>
-
               <button
                 onClick={processPayment}
-                className="w-full bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white font-bold py-3 px-6 rounded-xl transition-all duration-200"
+                className="w-full bg-gradient-to-r from-indigo-600 to-purple-700 text-white font-bold py-2.5 rounded-lg text-sm"
               >
-                Selesaikan Pembayaran
+                Bayar
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Receipt Modal */}
       {isReceiptModalOpen && receiptData && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 relative" id="receipt">
-            <div className="text-center">
-              <div className="border-b-2 border-gray-300 pb-2 mb-3">
-                <h2 className="text-lg font-bold">{receiptData.storeName}</h2>
-                <p className="text-xs">{receiptData.storeAddress}</p>
-                <p className="text-xs">Telp: {receiptData.storePhone}</p>
+          <div className="bg-white rounded-xl w-full max-w-xs sm:max-w-md p-5 relative" id="receipt">
+            <div className="text-center text-xs">
+              <div className="border-b pb-2 mb-2">
+                <h2 className="font-bold">{receiptData.storeName}</h2>
+                <p>{receiptData.storeAddress}</p>
+                <p>Telp: {receiptData.storePhone}</p>
               </div>
-              
-              <div className="text-xs mb-2">
-                <p>{receiptData.date} {receiptData.time}</p>
-                <p>No. Struk: {receiptData.id}</p>
-                <p>Kasir: {receiptData.cashier}</p>
-              </div>
-
-              {/* ✅ BARCODE STRUK */}
+              <p>{receiptData.date} {receiptData.time}</p>
+              <p>No. Struk: {receiptData.id}</p>
+              <p>Kasir: {receiptData.cashier}</p>
               <div id={`receipt-barcode-${receiptData.id}`} className="my-2 w-full"></div>
               <script dangerouslySetInnerHTML={{ __html: `
-                if (typeof JsBarcode !== 'undefined' && document.getElementById('receipt-barcode-${receiptData.id}')) {
-                  JsBarcode("#receipt-barcode-${receiptData.id}", "${receiptData.id || ''}", {
+                if (typeof JsBarcode !== 'undefined') {
+                  JsBarcode("#receipt-barcode-${receiptData.id}", "${receiptData.id}", {
                     format: "code128",
                     displayValue: true,
-                    fontSize: 14,
-                    height: 40
+                    fontSize: 12,
+                    height: 30
                   });
                 }
               `}} />
-
-              <div className="border-t border-b border-gray-300 py-1 mb-2 text-xs">
-                <div className="flex justify-between font-bold mb-1">
-                  <span>Barang</span>
-                  <span className="flex gap-4">
-                    <span>Qty</span>
-                    <span>Total</span>
-                  </span>
-                </div>
+              <div className="border-t border-b py-1 my-2">
                 {receiptData.items.map(item => (
                   <div key={item.id} className="flex justify-between mb-0.5">
-                    <span>{item.name.substring(0, 18)}</span>
-                    <span className="flex gap-4">
-                      <span>{item.quantity}</span>
-                      <span>{formatRupiah(item.price * item.quantity)}</span>
-                    </span>
+                    <span>{item.name.substring(0, 14)}</span>
+                    <span>{item.quantity} × {formatRupiah(item.price)}</span>
                   </div>
                 ))}
               </div>
-
-              <div className="text-xs space-y-0.5 mb-2">
-                <div className="flex justify-between">
-                  <span>SUBTOTAL</span>
-                  <span>{formatRupiah(receiptData.subtotal)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>PPN 11%</span>
-                  <span>{formatRupiah(receiptData.tax)}</span>
-                </div>
-                <div className="flex justify-between font-bold pt-1 border-t border-gray-300">
+              <div className="space-y-0.5 my-1">
+                <div className="flex justify-between font-bold">
                   <span>TOTAL</span>
                   <span>{formatRupiah(receiptData.total)}</span>
                 </div>
@@ -1440,7 +1213,7 @@ ${receiptData.storeName}
                   <span>BAYAR</span>
                   <span>{
                     receiptData.paymentMethod === 'cash' 
-                      ? formatRupiah(parseFloat(receiptData.cashReceived || 0)) 
+                      ? formatRupiah(receiptData.cashReceived) 
                       : formatRupiah(receiptData.total)
                   }</span>
                 </div>
@@ -1449,24 +1222,19 @@ ${receiptData.storeName}
                   <span>{formatRupiah(receiptData.change)}</span>
                 </div>
               </div>
-
-              <div className="text-xs text-gray-600 mt-2">
-                <p>TERIMA KASIH</p>
-                <p>{receiptData.storeName}</p>
-              </div>
+              <p className="mt-2 text-gray-600">TERIMA KASIH</p>
+              <p>{receiptData.storeName}</p>
             </div>
-
-            <div className="flex gap-3 mt-6">
+            <div className="flex gap-2 mt-4">
               <button
                 onClick={printReceipt}
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center"
+                className="flex-1 bg-green-600 text-white py-2 rounded text-xs"
               >
-                <i className="fas fa-print mr-2"></i>
-                Cetak
+                <i className="fas fa-print mr-1"></i> Cetak
               </button>
               <button
                 onClick={() => setIsReceiptModalOpen(false)}
-                className="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg"
+                className="flex-1 bg-gray-600 text-white py-2 rounded text-xs"
               >
                 Tutup
               </button>
@@ -1474,46 +1242,25 @@ ${receiptData.storeName}
           </div>
         </div>
       )}
-{/* ✅ TOMBOL BAYAR DENGAN VALIDASI */}
-              <button
-                onClick={processPayment}
-                disabled={cart.length === 0 || cart.some(item => item.quantity > item.stock)}
-                className={`w-full py-3 px-6 rounded-xl font-bold transition-all duration-200 ${
-                  cart.length === 0 || cart.some(item => item.quantity > item.stock)
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white shadow-lg hover:shadow-xl'
-                }`}
-              >
-                {cart.some(item => item.quantity > item.stock)
-                  ? 'Stok Tidak Cukup!'
-                  : `Bayar ${formatRupiah(cartTotal * 1.11)}`}
-              </button>
 
-      {/* ... (Receipt Modal, Scanner Modal tetap sama) ... */}
-    
-      
-      {/* ✅ MODAL SCANNER BARCODE */}
       {isScannerOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-lg w-full max-w-md">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold">Scan Barcode Produk</h3>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-4 rounded-lg w-full max-w-xs sm:max-w-md">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-bold text-sm">Scan Barcode Produk</h3>
               <button 
                 onClick={stopScanner}
                 className="text-gray-500 hover:text-gray-700"
               >
-                <i className="fas fa-times"></i>
+                <i className="fas fa-times text-xs"></i>
               </button>
             </div>
-            
-            <div id="barcode-scanner" className="w-full h-64 bg-black rounded"></div>
-            
+            <div id="barcode-scanner" className="w-full h-40 sm:h-48 bg-black rounded"></div>
             {scannerError && (
-              <div className="mt-4 text-red-600 text-sm">{scannerError}</div>
+              <div className="mt-2 text-red-600 text-xs">{scannerError}</div>
             )}
-            
-            <p className="text-xs text-gray-500 mt-2">
-              Arahkan kamera ke barcode produk. Pastikan pencahayaan cukup.
+            <p className="text-[10px] text-gray-500 mt-1">
+              Arahkan kamera ke barcode.
             </p>
           </div>
         </div>
@@ -1521,5 +1268,3 @@ ${receiptData.storeName}
     </>
   );
 }
-
-            
