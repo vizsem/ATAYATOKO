@@ -20,6 +20,7 @@ import {
   onAuthStateChanged, 
   signOut 
 } from 'firebase/auth';
+import { Html5Qrcode } from "html5-qrcode";
 import { auth, db } from '../lib/firebase';
 
 export default function AdminPanel() {
@@ -34,7 +35,7 @@ export default function AdminPanel() {
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [cashReceived, setCashReceived] = useState('');
   const [receiptData, setReceiptData] = useState(null);
-  const [activeTab, setActiveTab] = useState('pos'); // 'pos', 'backoffice', 'reports'
+  const [activeTab, setActiveTab] = useState('pos');
   const [editingProduct, setEditingProduct] = useState(null);
   const [newProduct, setNewProduct] = useState({
     name: '',
@@ -44,14 +45,19 @@ export default function AdminPanel() {
     stock: 0,
     supplier: '',
     category: 'makanan',
-    imageUrl: ''
+    imageUrl: '',
+    sku: '',
+    barcode: ''
   });
-  const fileInputRef = useRef(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [importStatus, setImportStatus] = useState({ show: false, message: '', error: false });
   const [lowStockItems, setLowStockItems] = useState([]);
   const [salesReport, setSalesReport] = useState([]);
   const [reportPeriod, setReportPeriod] = useState('today');
+  const [selectedProducts, setSelectedProducts] = useState([]);
+  const [massUpdate, setMassUpdate] = useState({ priceEcer: '', priceGrosir: '', stock: '' });
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerError, setScannerError] = useState('');
 
   // Cek autentikasi admin
   useEffect(() => {
@@ -90,7 +96,9 @@ export default function AdminPanel() {
     let filtered = products;
     if (searchTerm) {
       filtered = filtered.filter(product =>
-        product.name.toLowerCase().includes(searchTerm.toLowerCase())
+        product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        product.sku?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        product.barcode?.includes(searchTerm)
       );
     }
     if (selectedCategory !== 'all') {
@@ -180,6 +188,21 @@ export default function AdminPanel() {
     return `TK${dateStr}-${timeStr}`;
   };
 
+  // Generate EAN-13 barcode dari SKU
+  const generateBarcode = (sku) => {
+    if (!sku) return '';
+    const digits = sku.replace(/\D/g, '');
+    const base = ('899' + digits).padEnd(12, '0').slice(0, 12);
+    
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      sum += parseInt(base[i]) * (i % 2 === 0 ? 1 : 3);
+    }
+    const checksum = (10 - (sum % 10)) % 10;
+    
+    return base + checksum;
+  };
+
   // Proses pembayaran + update stok
   const processPayment = async () => {
     if (selectedPaymentMethod === 'cash') {
@@ -197,7 +220,6 @@ export default function AdminPanel() {
       const batch = writeBatch(db);
       const orderItems = [];
 
-      // Kurangi stok
       for (const item of cart) {
         const productRef = doc(db, 'products', item.id);
         batch.update(productRef, { stock: increment(-item.quantity) });
@@ -206,11 +228,11 @@ export default function AdminPanel() {
           name: item.name,
           price: item.price,
           quantity: item.quantity,
-          imageUrl: item.imageUrl
+          imageUrl: item.imageUrl,
+          barcode: item.barcode
         });
       }
 
-      // Simpan order
       await addDoc(collection(db, 'orders'), {
         id: receiptNumber,
         date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
@@ -331,8 +353,24 @@ ${receiptData.storeName}
   const handleAddProduct = async () => {
     if (newProduct.name && (newProduct.priceEcer || newProduct.priceGrosir)) {
       try {
+        let sku = newProduct.sku?.trim();
+        if (!sku) {
+          const timestamp = Date.now().toString(36).toUpperCase();
+          sku = `SKU-${timestamp}`;
+        }
+        
+        const skuExists = products.some(p => p.sku === sku);
+        if (skuExists) {
+          alert('SKU sudah digunakan!');
+          return;
+        }
+
+        const barcode = newProduct.barcode?.trim() || generateBarcode(sku);
+
         await addDoc(collection(db, 'products'), {
           ...newProduct,
+          sku,
+          barcode,
           hargaBeli: parseFloat(newProduct.hargaBeli) || 0,
           priceEcer: parseFloat(newProduct.priceEcer) || 0,
           priceGrosir: parseFloat(newProduct.priceGrosir) || 0,
@@ -347,7 +385,9 @@ ${receiptData.storeName}
           stock: 0,
           supplier: '',
           category: 'makanan',
-          imageUrl: ''
+          imageUrl: '',
+          sku: '',
+          barcode: ''
         });
       } catch (err) {
         alert('Gagal menambah produk!');
@@ -388,10 +428,23 @@ ${receiptData.storeName}
           throw new Error(`Kolom wajib tidak ditemukan: ${missingColumns.join(', ')}`);
         }
 
+        // Cek duplikat SKU di file
+        const skusInFile = new Set();
+        for (const row of jsonData) {
+          const sku = String(row.sku || '').trim() || `SKU-${Date.now().toString(36).toUpperCase()}`;
+          if (skusInFile.has(sku)) {
+            throw new Error(`SKU duplikat ditemukan di file: ${sku}`);
+          }
+          skusInFile.add(sku);
+        }
+
         const batch = writeBatch(db);
         let count = 0;
 
         for (const row of jsonData) {
+          const sku = String(row.sku || '').trim() || `SKU-${Date.now().toString(36).toUpperCase()}`;
+          const barcode = String(row.barcode || '').trim() || generateBarcode(sku);
+          
           const product = {
             name: String(row.nama || row.name || '').trim(),
             hargaBeli: Number(row.harga_beli) || 0,
@@ -401,6 +454,8 @@ ${receiptData.storeName}
             supplier: String(row.supplier || '').trim(),
             category: String(row.kategori || row.category || 'makanan').toLowerCase(),
             imageUrl: String(row.foto || row.imageUrl || ''),
+            sku,
+            barcode,
             createdAt: new Date()
           };
 
@@ -439,9 +494,11 @@ ${receiptData.storeName}
     reader.readAsArrayBuffer(file);
   };
 
-  // ✅ EKSPOR DATA PRODUK (BUKAN LAPORAN)
+  // ✅ EKSPOR DATA PRODUK
   const exportProducts = () => {
     const data = products.map(product => ({
+      'sku': product.sku || '',
+      'barcode': product.barcode || '',
       'nama': product.name || '',
       'kategori': product.category || 'makanan',
       'harga_beli': product.hargaBeli || 0,
@@ -456,7 +513,6 @@ ${receiptData.storeName}
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Data Produk");
     
-    // Auto-size kolom
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     for (let C = range.s.c; C <= range.e.c; ++C) {
       const col = XLSX.utils.decode_col(XLSX.utils.encode_col(C));
@@ -485,7 +541,6 @@ ${receiptData.storeName}
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Laporan Penjualan");
     
-    // Auto-size kolom
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     for (let C = range.s.c; C <= range.e.c; ++C) {
       const col = XLSX.utils.decode_col(XLSX.utils.encode_col(C));
@@ -496,6 +551,86 @@ ${receiptData.storeName}
     XLSX.writeFile(wb, `laporan_penjualan_${reportPeriod}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  // ✅ EDIT MASSAL
+  const handleMassUpdate = async () => {
+    if (selectedProducts.length === 0) {
+      alert('Pilih minimal 1 produk!');
+      return;
+    }
+
+    const updates = {};
+    if (massUpdate.priceEcer !== '') updates.priceEcer = parseFloat(massUpdate.priceEcer);
+    if (massUpdate.priceGrosir !== '') updates.priceGrosir = parseFloat(massUpdate.priceGrosir);
+    if (massUpdate.stock !== '') updates.stock = parseInt(massUpdate.stock);
+
+    if (Object.keys(updates).length === 0) {
+      alert('Isi minimal 1 field untuk update!');
+      return;
+    }
+
+    try {
+      const batch = writeBatch(db);
+      selectedProducts.forEach(id => {
+        const productRef = doc(db, 'products', id);
+        batch.update(productRef, updates);
+      });
+      await batch.commit();
+      
+      alert(`Berhasil update ${selectedProducts.length} produk!`);
+      setSelectedProducts([]);
+      setMassUpdate({ priceEcer: '', priceGrosir: '', stock: '' });
+    } catch (err) {
+      alert('Gagal update massal!');
+    }
+  };
+
+  // ✅ TOGGLE SELECT PRODUK
+  const toggleSelectProduct = (id) => {
+    setSelectedProducts(prev => 
+      prev.includes(id) 
+        ? prev.filter(x => x !== id) 
+        : [...prev, id]
+    );
+  };
+
+  // ✅ START SCANNER
+  const startScanner = () => {
+    setIsScannerOpen(true);
+    setScannerError('');
+    
+    const html5QrCode = new Html5Qrcode("barcode-scanner");
+    html5QrCode.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: { width: 250, height: 250 },
+        aspectRatio: 1.0
+      },
+      (scannedText) => {
+        const product = products.find(p => p.barcode === scannedText);
+        if (product) {
+          addToCart(product);
+          alert(`${product.name} ditambahkan ke keranjang!`);
+        } else {
+          setScannerError('Produk tidak ditemukan untuk barcode ini!');
+        }
+        html5QrCode.stop();
+        setIsScannerOpen(false);
+      },
+      (error) => {
+        // Error callback
+      }
+    ).catch((err) => {
+      setScannerError('Gagal mengakses kamera. Izinkan akses kamera di browser.');
+      setIsScannerOpen(false);
+    });
+  };
+
+  // ✅ STOP SCANNER
+  const stopScanner = () => {
+    setIsScannerOpen(false);
+  };
+
   const categories = ['all', 'makanan', 'minuman', 'kebersihan', 'perawatan'];
   const paymentMethods = [
     { id: 'cash', name: 'Tunai', icon: 'fas fa-money-bill-wave' },
@@ -503,7 +638,6 @@ ${receiptData.storeName}
     { id: 'e-wallet', name: 'E-Wallet', icon: 'fas fa-wallet' }
   ];
 
-  // Hitung statistik laporan
   const totalSales = salesReport.reduce((sum, order) => sum + order.total, 0);
   const totalOrders = salesReport.length;
   const avgOrder = totalOrders > 0 ? totalSales / totalOrders : 0;
@@ -516,8 +650,8 @@ ${receiptData.storeName}
         <title>ATAYATOKO - Admin POS</title>
         <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-        {/* ✅ SHEETJS CDN */}
         <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
         <style>{`
           body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
           @media print {
@@ -528,7 +662,7 @@ ${receiptData.storeName}
         `}</style>
       </Head>
 
-      {/* Notifikasi Import */}
+      {/* Notifikasi */}
       {importStatus.show && (
         <div className={`fixed top-24 right-6 p-4 rounded-lg shadow-lg z-50 ${
           importStatus.error ? 'bg-red-100 border-l-4 border-red-500 text-red-700' : 'bg-green-100 border-l-4 border-green-500 text-green-700'
@@ -547,6 +681,16 @@ ${receiptData.storeName}
             <h1 className="text-2xl font-bold text-gray-900">ATAYATOKO - POS</h1>
           </div>
           <div className="flex items-center space-x-4">
+            {/* ✅ TOMBOL SCAN BARCODE */}
+            {activeTab === 'pos' && (
+              <button
+                onClick={startScanner}
+                className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-full"
+                title="Scan Barcode"
+              >
+                <i className="fas fa-barcode"></i>
+              </button>
+            )}
             <div className="flex bg-gray-100 rounded-lg p-1">
               <button
                 onClick={() => setActiveTab('pos')}
@@ -569,9 +713,7 @@ ${receiptData.storeName}
                 Produk
               </button>
               <button
-                onClick={() => {
-                  setActiveTab('reports');
-                }}
+                onClick={() => setActiveTab('reports')}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
                   activeTab === 'reports'
                     ? 'bg-white text-indigo-700 shadow-sm'
@@ -603,8 +745,9 @@ ${receiptData.storeName}
         </div>
       )}
 
+      {/* ... (UI POS tetap sama) ... */}
+
       {activeTab === 'pos' && (
-        // ... (UI POS sama seperti sebelumnya)
         <div className="flex">
           <div className="w-full lg:w-2/3 xl:w-3/4 p-6">
             <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
@@ -613,7 +756,7 @@ ${receiptData.storeName}
                   <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
                   <input
                     type="text"
-                    placeholder="Cari produk..."
+                    placeholder="Cari produk, SKU, atau barcode..."
                     className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
@@ -654,8 +797,8 @@ ${receiptData.storeName}
                     <h3 className="font-medium text-gray-900 text-center mb-1">{product.name}</h3>
                     <p className="text-indigo-600 font-bold text-center mb-2">{formatRupiah(product.priceEcer)}</p>
                     <div className="flex justify-between items-center text-sm text-gray-600">
-                      <span>{product.category}</span>
                       <span>Stok: {product.stock}</span>
+                      <span className="font-mono text-xs">{product.sku}</span>
                     </div>
                   </div>
                 ))}
@@ -664,6 +807,7 @@ ${receiptData.storeName}
           </div>
 
           <div className="w-full lg:w-1/3 xl:w-1/4 p-6">
+            {/* ... (UI keranjang tetap sama) ... */}
             <div className="bg-white rounded-xl shadow-sm p-6 sticky top-6">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold text-gray-900">Keranjang Belanja</h2>
@@ -755,11 +899,9 @@ ${receiptData.storeName}
       {activeTab === 'backoffice' && (
         <div className="p-6">
           <div className="bg-white rounded-xl shadow-sm p-6">
-            {/* ✅ TOMBOL EKSPOR/IMPOR PRODUK */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6">
               <h2 className="text-2xl font-bold text-gray-900 mb-4 sm:mb-0">Manajemen Produk</h2>
               <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                {/* ✅ EKSPOR PRODUK */}
                 <button
                   onClick={exportProducts}
                   className="flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
@@ -767,7 +909,6 @@ ${receiptData.storeName}
                   <i className="fas fa-file-export mr-2"></i>
                   Ekspor Produk
                 </button>
-                {/* ✅ IMPOR PRODUK */}
                 <input
                   type="file"
                   accept=".xlsx,.xls"
@@ -787,7 +928,7 @@ ${receiptData.storeName}
 
             <div className="border border-gray-200 rounded-xl p-6 mb-6 bg-gray-50">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Tambah Produk Baru</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 <input
                   type="text"
                   placeholder="Nama Produk"
@@ -796,11 +937,18 @@ ${receiptData.storeName}
                   onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
                 />
                 <input
-                  type="number"
-                  placeholder="Harga Beli"
+                  type="text"
+                  placeholder="SKU (auto-generate jika kosong)"
                   className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.hargaBeli}
-                  onChange={(e) => setNewProduct({...newProduct, hargaBeli: e.target.value})}
+                  value={newProduct.sku}
+                  onChange={(e) => setNewProduct({...newProduct, sku: e.target.value})}
+                />
+                <input
+                  type="text"
+                  placeholder="Barcode (opsional)"
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  value={newProduct.barcode}
+                  onChange={(e) => setNewProduct({...newProduct, barcode: e.target.value})}
                 />
                 <input
                   type="number"
@@ -811,17 +959,24 @@ ${receiptData.storeName}
                 />
                 <input
                   type="number"
-                  placeholder="Harga Grosir"
-                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  value={newProduct.priceGrosir}
-                  onChange={(e) => setNewProduct({...newProduct, priceGrosir: e.target.value})}
-                />
-                <input
-                  type="number"
                   placeholder="Stok"
                   className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                   value={newProduct.stock}
                   onChange={(e) => setNewProduct({...newProduct, stock: e.target.value})}
+                />
+                <input
+                  type="number"
+                  placeholder="Harga Beli"
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  value={newProduct.hargaBeli}
+                  onChange={(e) => setNewProduct({...newProduct, hargaBeli: e.target.value})}
+                />
+                <input
+                  type="number"
+                  placeholder="Harga Grosir"
+                  className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  value={newProduct.priceGrosir}
+                  onChange={(e) => setNewProduct({...newProduct, priceGrosir: e.target.value})}
                 />
                 <input
                   type="text"
@@ -856,13 +1011,28 @@ ${receiptData.storeName}
               </button>
             </div>
 
+            {/* Tabel Produk dengan SKU & Barcode */}
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-gray-100">
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">
+                      <input
+                        type="checkbox"
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedProducts(products.map(p => p.id));
+                          } else {
+                            setSelectedProducts([]);
+                          }
+                        }}
+                        checked={selectedProducts.length === products.length && products.length > 0}
+                      />
+                    </th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">SKU</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Barcode</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Produk</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Kategori</th>
-                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Harga Beli</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Harga Ecer</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Stok</th>
                     <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Aksi</th>
@@ -873,6 +1043,25 @@ ${receiptData.storeName}
                     <tr key={product.id} className="border-b border-gray-200 hover:bg-gray-50">
                       {editingProduct && editingProduct.id === product.id ? (
                         <>
+                          <td className="px-4 py-3">
+                            <input type="checkbox" disabled />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="text"
+                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                              value={editingProduct.sku}
+                              onChange={(e) => setEditingProduct({...editingProduct, sku: e.target.value})}
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="text"
+                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                              value={editingProduct.barcode}
+                              onChange={(e) => setEditingProduct({...editingProduct, barcode: e.target.value})}
+                            />
+                          </td>
                           <td className="px-4 py-3">
                             <input
                               type="text"
@@ -892,14 +1081,6 @@ ${receiptData.storeName}
                               <option value="kebersihan">Kebersihan</option>
                               <option value="perawatan">Perawatan</option>
                             </select>
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="number"
-                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                              value={editingProduct.hargaBeli}
-                              onChange={(e) => setEditingProduct({...editingProduct, hargaBeli: e.target.value})}
-                            />
                           </td>
                           <td className="px-4 py-3">
                             <input
@@ -937,6 +1118,15 @@ ${receiptData.storeName}
                       ) : (
                         <>
                           <td className="px-4 py-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedProducts.includes(product.id)}
+                              onChange={() => toggleSelectProduct(product.id)}
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-gray-700 font-mono text-xs">{product.sku}</td>
+                          <td className="px-4 py-3 text-gray-700 font-mono text-xs">{product.barcode || '-'}</td>
+                          <td className="px-4 py-3">
                             <div className="flex items-center">
                               <img
                                 src={product.imageUrl || '/placeholder.webp'}
@@ -948,7 +1138,6 @@ ${receiptData.storeName}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-gray-700">{product.category}</td>
-                          <td className="px-4 py-3 text-gray-700">{formatRupiah(product.hargaBeli)}</td>
                           <td className="px-4 py-3 text-indigo-600 font-medium">{formatRupiah(product.priceEcer)}</td>
                           <td className="px-4 py-3 text-gray-700">{product.stock}</td>
                           <td className="px-4 py-3">
@@ -974,16 +1163,60 @@ ${receiptData.storeName}
                 </tbody>
               </table>
             </div>
+
+            {/* Panel Edit Massal */}
+            {selectedProducts.length > 0 && (
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h3 className="font-bold mb-2">Edit Massal ({selectedProducts.length} produk dipilih)</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                  <input
+                    type="number"
+                    placeholder="Harga Ecer Baru"
+                    className="px-2 py-1 border rounded"
+                    value={massUpdate.priceEcer}
+                    onChange={(e) => setMassUpdate({...massUpdate, priceEcer: e.target.value})}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Harga Grosir Baru"
+                    className="px-2 py-1 border rounded"
+                    value={massUpdate.priceGrosir}
+                    onChange={(e) => setMassUpdate({...massUpdate, priceGrosir: e.target.value})}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Stok Baru"
+                    className="px-2 py-1 border rounded"
+                    value={massUpdate.stock}
+                    onChange={(e) => setMassUpdate({...massUpdate, stock: e.target.value})}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleMassUpdate}
+                    className="bg-blue-600 text-white px-4 py-2 rounded"
+                  >
+                    Update Massal
+                  </button>
+                  <button
+                    onClick={() => setSelectedProducts([])}
+                    className="bg-gray-600 text-white px-4 py-2 rounded"
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {activeTab === 'reports' && (
+        // ... (UI laporan tetap sama)
         <div className="p-6">
           <div className="bg-white rounded-xl shadow-sm p-6">
             <h2 className="text-2xl font-bold text-gray-900 mb-4">Laporan Penjualan</h2>
             
-            {/* ✅ TOMBOL EKSPOR LAPORAN */}
             <div className="flex gap-4 mb-6">
               {['today', 'week', 'month'].map(period => (
                 <button
@@ -999,7 +1232,6 @@ ${receiptData.storeName}
                    period === 'week' ? '7 Hari' : '30 Hari'}
                 </button>
               ))}
-              {/* ✅ EKSPOR LAPORAN */}
               <button
                 onClick={exportSalesReport}
                 className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center"
@@ -1059,6 +1291,7 @@ ${receiptData.storeName}
 
       {/* Payment Modal */}
       {isPaymentModalOpen && (
+        // ... (modal pembayaran tetap sama)
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6">
             <div className="flex justify-between items-center mb-6">
@@ -1158,6 +1391,19 @@ ${receiptData.storeName}
                 <p>Kasir: {receiptData.cashier}</p>
               </div>
 
+              {/* ✅ BARCODE STRUK */}
+              <div id={`receipt-barcode-${receiptData.id}`} className="my-2 w-full"></div>
+              <script dangerouslySetInnerHTML={{ __html: `
+                if (typeof JsBarcode !== 'undefined' && document.getElementById('receipt-barcode-${receiptData.id}')) {
+                  JsBarcode("#receipt-barcode-${receiptData.id}", "${receiptData.id || ''}", {
+                    format: "code128",
+                    displayValue: true,
+                    fontSize: 14,
+                    height: 40
+                  });
+                }
+              `}} />
+
               <div className="border-t border-b border-gray-300 py-1 mb-2 text-xs">
                 <div className="flex justify-between font-bold mb-1">
                   <span>Barang</span>
@@ -1225,6 +1471,33 @@ ${receiptData.storeName}
                 Tutup
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ MODAL SCANNER BARCODE */}
+      {isScannerOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold">Scan Barcode Produk</h3>
+              <button 
+                onClick={stopScanner}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <i className="fas fa-times"></i>
+              </button>
+            </div>
+            
+            <div id="barcode-scanner" className="w-full h-64 bg-black rounded"></div>
+            
+            {scannerError && (
+              <div className="mt-4 text-red-600 text-sm">{scannerError}</div>
+            )}
+            
+            <p className="text-xs text-gray-500 mt-2">
+              Arahkan kamera ke barcode produk. Pastikan pencahayaan cukup.
+            </p>
           </div>
         </div>
       )}
