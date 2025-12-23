@@ -20,7 +20,6 @@ import {
 } from 'firebase/auth';
 import { Html5Qrcode } from "html5-qrcode";
 import { auth, db } from '../lib/firebase';
-
 export default function AdminPanel() {
   const router = useRouter();
   const [products, setProducts] = useState([]);
@@ -56,7 +55,6 @@ export default function AdminPanel() {
   const [massUpdate, setMassUpdate] = useState({ priceEcer: '', priceGrosir: '', stock: '' });
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [scannerError, setScannerError] = useState('');
-
   // ✅ FORMAT RUPIAH BULAT TANPA KOMA
   const formatRupiah = (number) => {
     return new Intl.NumberFormat('id-ID', {
@@ -66,22 +64,27 @@ export default function AdminPanel() {
       maximumFractionDigits: 0
     }).format(Math.round(number));
   };
-
   // === AUTH & DATA LOADING ===
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return router.push('/');
       const userDoc = await getDoc(doc(db, 'users', user.uid));
-      if (!userDoc.exists() || userDoc.data().role !== 'admin') {
-        alert('Akses ditolak!');
+      if (!userDoc.exists()) {
+        alert('Akses ditolak: pengguna tidak ditemukan!');
         router.push('/');
-      } else {
-        setCurrentUser(user);
+        return;
       }
+      const userRole = userDoc.data().role;
+      // ✅ IZINKAN baik 'admin' maupun 'cashier'
+      if (userRole !== 'admin' && userRole !== 'cashier') {
+        alert('Akses ditolak: role tidak diizinkan!');
+        router.push('/');
+        return;
+      }
+      setCurrentUser(user);
     });
     return () => unsubscribe();
   }, []);
-
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -90,12 +93,10 @@ export default function AdminPanel() {
     });
     return () => unsubscribe();
   }, []);
-
   useEffect(() => {
     const lowStock = products.filter(p => (p.stock || 0) < 10);
     setLowStockItems(lowStock);
   }, [products]);
-
   // ✅ FILTER + RESET HALAMAN
   useEffect(() => {
     let filtered = products;
@@ -112,7 +113,6 @@ export default function AdminPanel() {
     setFilteredProducts(filtered);
     setCurrentPage(1); // ✅ Reset ke halaman 1 saat filter berubah
   }, [searchTerm, selectedCategory, products]);
-
   // LAPORAN PENJUALAN
   useEffect(() => {
     if (activeTab !== 'reports' || !currentUser) return;
@@ -132,10 +132,8 @@ export default function AdminPanel() {
     };
     loadSalesReport();
   }, [reportPeriod, activeTab, currentUser]);
-
   // === POS LOGIC ===
   const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-
   const addToCart = (product) => {
     const existingItem = cart.find(item => item.id === product.id);
     if (existingItem) {
@@ -146,7 +144,6 @@ export default function AdminPanel() {
       setCart([...cart, { ...product, quantity: 1, price: product.priceEcer }]);
     }
   };
-
   const updateQuantity = (id, newQuantity) => {
     if (newQuantity === 0) {
       removeFromCart(id);
@@ -156,22 +153,18 @@ export default function AdminPanel() {
       item.id === id ? { ...item, quantity: newQuantity } : item
     ));
   };
-
   const removeFromCart = (id) => {
     setCart(cart.filter(item => item.id !== id));
   };
-
   const clearCart = () => {
     setCart([]);
   };
-
   const generateReceiptNumber = () => {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0].replace(/-/g, '');
     const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '');
     return `TK${dateStr}-${timeStr}`;
   };
-
   const generateBarcode = (sku) => {
     if (!sku) return '';
     const digits = sku.replace(/\D/g, '');
@@ -183,7 +176,6 @@ export default function AdminPanel() {
     const checksum = (10 - (sum % 10)) % 10;
     return base + checksum;
   };
-
   const processPayment = async () => {
     if (selectedPaymentMethod === 'cash') {
       const cash = parseFloat(cashReceived);
@@ -216,7 +208,6 @@ export default function AdminPanel() {
       const cashReceivedRounded = selectedPaymentMethod === 'cash' 
         ? Math.round(parseFloat(cashReceived)) 
         : totalRounded;
-
       await addDoc(collection(db, 'orders'), {
         id: receiptNumber,
         date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
@@ -232,7 +223,6 @@ export default function AdminPanel() {
         storeAddress: "Jl. Raya Utama No. 123",
         storePhone: "(021) 1234-5678"
       });
-
       const receipt = {
         id: receiptNumber,
         date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
@@ -257,7 +247,6 @@ export default function AdminPanel() {
       alert('Gagal memproses transaksi!');
     }
   };
-
   const printReceipt = () => {
     if (!receiptData) return;
     const commands = `
@@ -296,12 +285,10 @@ ${receiptData.storeName}
       window.print();
     }
   };
-
   // === PRODUCT MANAGEMENT ===
   const handleEditProduct = (product) => {
     setEditingProduct({ ...product });
   };
-
   const handleSaveProduct = async () => {
     if (editingProduct) {
       try {
@@ -312,7 +299,6 @@ ${receiptData.storeName}
       }
     }
   };
-
   const handleDeleteProduct = async (id) => {
     if (window.confirm('Hapus produk ini?')) {
       try {
@@ -322,7 +308,6 @@ ${receiptData.storeName}
       }
     }
   };
-
   const handleAddProduct = async () => {
     if (newProduct.name && (newProduct.priceEcer || newProduct.priceGrosir)) {
       try {
@@ -364,19 +349,16 @@ ${receiptData.storeName}
       }
     }
   };
-
   // ✅ HAPUS PRODUK TERPILIH
   const handleDeleteSelected = async () => {
     if (selectedProducts.length === 0) {
       alert('Tidak ada produk yang dipilih!');
       return;
     }
-
     const confirmed = window.confirm(
       `Yakin ingin menghapus ${selectedProducts.length} produk yang dipilih? Aksi ini tidak bisa dikembalikan.`
     );
     if (!confirmed) return;
-
     try {
       const batch = writeBatch(db);
       selectedProducts.forEach(id => {
@@ -390,7 +372,6 @@ ${receiptData.storeName}
       alert('Gagal menghapus produk terpilih!');
     }
   };
-
   // IMPORT / EXPORT (tidak diubah)
   const handleImportExcel = (e) => {
     const file = e.target.files[0];
@@ -473,7 +454,6 @@ ${receiptData.storeName}
     };
     reader.readAsArrayBuffer(file);
   };
-
   const exportProducts = () => {
     const data = products.map(product => ({
       'sku': product.sku || '',
@@ -498,7 +478,6 @@ ${receiptData.storeName}
     }
     XLSX.writeFile(wb, "produk_atayatoko.xlsx");
   };
-
   const exportSalesReport = () => {
     const data = salesReport.map(order => ({
       'No. Struk': order.id || '',
@@ -522,7 +501,6 @@ ${receiptData.storeName}
     }
     XLSX.writeFile(wb, `laporan_penjualan_${reportPeriod}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
-
   const handleMassUpdate = async () => {
     if (selectedProducts.length === 0) {
       alert('Pilih minimal 1 produk!');
@@ -550,7 +528,6 @@ ${receiptData.storeName}
       alert('Gagal update massal!');
     }
   };
-
   const toggleSelectProduct = (id) => {
     setSelectedProducts(prev => 
       prev.includes(id) 
@@ -558,7 +535,6 @@ ${receiptData.storeName}
         : [...prev, id]
     );
   };
-
   const startScanner = () => {
     setIsScannerOpen(true);
     setScannerError('');
@@ -587,38 +563,30 @@ ${receiptData.storeName}
       setIsScannerOpen(false);
     });
   };
-
   const stopScanner = () => {
     setIsScannerOpen(false);
   };
-
   // === PAGINATION ===
   const [currentPage, setCurrentPage] = useState(1);
   const PRODUCTS_PER_PAGE = 500;
-
   const categories = ['all', 'makanan', 'minuman', 'kebersihan', 'perawatan'];
   const paymentMethods = [
     { id: 'cash', name: 'Tunai', icon: 'fas fa-money-bill-wave' },
     { id: 'card', name: 'Kartu Kredit', icon: 'fas fa-credit-card' },
     { id: 'e-wallet', name: 'E-Wallet', icon: 'fas fa-wallet' }
   ];
-
   const totalSales = salesReport.reduce((sum, order) => sum + order.total, 0);
   const totalOrders = salesReport.length;
   const avgOrder = totalOrders > 0 ? totalSales / totalOrders : 0;
-
   if (!currentUser) return <div className="p-6">Loading...</div>;
-
   // Hitung produk untuk halaman ini
   const indexOfLastProduct = currentPage * PRODUCTS_PER_PAGE;
   const indexOfFirstProduct = indexOfLastProduct - PRODUCTS_PER_PAGE;
   const currentProducts = filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct);
   const totalPages = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
-
   // Cek apakah semua produk di halaman ini dipilih
   const isAllSelectedInPage = currentProducts.length > 0 && 
     currentProducts.every(p => selectedProducts.includes(p.id));
-
   // Handler "Pilih Semua" (hanya halaman ini)
   const handleSelectAll = (e) => {
     if (e.target.checked) {
@@ -630,7 +598,6 @@ ${receiptData.storeName}
       setSelectedProducts(selectedProducts.filter(id => !currentPageIds.has(id)));
     }
   };
-
   return (
     <>
       <Head>
@@ -652,7 +619,6 @@ ${receiptData.storeName}
           }
         `}</style>
       </Head>
-
       {importStatus.show && (
         <div className={`fixed top-24 right-6 p-4 rounded-lg shadow-lg z-50 ${
           importStatus.error ? 'bg-red-100 border-l-4 border-red-500 text-red-700' : 'bg-green-100 border-l-4 border-green-500 text-green-700'
@@ -660,7 +626,6 @@ ${receiptData.storeName}
           <p className="font-medium">{importStatus.message}</p>
         </div>
       )}
-
       {/* HEADER */}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
@@ -704,14 +669,12 @@ ${receiptData.storeName}
           </div>
         </div>
       </header>
-
       {activeTab === 'pos' && lowStockItems.length > 0 && (
         <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 mx-4 sm:mx-6">
           <p className="font-bold">⚠️ Stok Rendah!</p>
           <p>{lowStockItems.length} produk perlu restok segera.</p>
         </div>
       )}
-
       {activeTab === 'pos' && (
         <div className="flex flex-col lg:flex-row">
           <div className="w-full lg:w-2/3 xl:w-3/4 p-4 sm:p-6">
@@ -853,7 +816,6 @@ ${receiptData.storeName}
           </div>
         </div>
       )}
-
       {/* ✅ TAB PRODUK DENGAN PAGINASI & HAPUS TERPILIH */}
       {activeTab === 'backoffice' && (
         <div className="p-4 sm:p-6">
@@ -930,7 +892,6 @@ ${receiptData.storeName}
                 Tambah Produk
               </button>
             </div>
-
             {/* FILTER */}
             <div className="mb-4 flex flex-wrap gap-2">
               <input
@@ -952,7 +913,6 @@ ${receiptData.storeName}
                 <option value="perawatan">Perawatan</option>
               </select>
             </div>
-
             {/* TABEL + PAGINASI + AKSI MASSAL */}
             <div className="overflow-x-auto -mx-4 px-4">
               <table className="w-full min-w-[600px] text-xs sm:text-sm">
@@ -1059,7 +1019,6 @@ ${receiptData.storeName}
                 </tbody>
               </table>
             </div>
-
             {/* PAGINASI */}
             {totalPages > 1 && (
               <div className="flex flex-wrap justify-center mt-4 gap-1 sm:gap-2">
@@ -1090,7 +1049,6 @@ ${receiptData.storeName}
                 </button>
               </div>
             )}
-
             {/* PANEL AKSI MASSAL */}
             {selectedProducts.length > 0 && (
               <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
@@ -1146,7 +1104,6 @@ ${receiptData.storeName}
           </div>
         </div>
       )}
-
       {activeTab === 'reports' && (
         <div className="p-4 sm:p-6">
           <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
@@ -1220,14 +1177,29 @@ ${receiptData.storeName}
           </div>
         </div>
       )}
-
       {/* MODAL (tidak diubah) */}
       {isPaymentModalOpen && (
-        {/* ... */ }
+        {/* ... isi modal ... */}
       )}
-
-      {/* ... modal lainnya ... */}
-
+      {isReceiptModalOpen && (
+        {/* ... isi modal struk ... */}
+      )}
+      {isScannerOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-4 rounded-lg relative">
+            <button
+              onClick={stopScanner}
+              className="absolute top-2 right-2 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center"
+            >
+              ✕
+            </button>
+            <div id="barcode-scanner" className="w-64 h-64"></div>
+            {scannerError && (
+              <p className="text-red-500 mt-2 text-center">{scannerError}</p>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }
