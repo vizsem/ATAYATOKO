@@ -7,7 +7,7 @@ import {
   doc,
   setDoc,
   getDoc,
-  getDocs // ✅ Hanya getDocs, bukan onSnapshot
+  getDocs
 } from 'firebase/firestore';
 import {
   createUserWithEmailAndPassword,
@@ -23,7 +23,6 @@ export async function getStaticProps() {
     const snapshot = await getDocs(collection(db, 'products'));
     const products = snapshot.docs.map(doc => {
       const data = doc.data();
-      // ✅ Handle undefined & konversi Timestamp
       return {
         id: doc.id,
         ...data,
@@ -51,14 +50,14 @@ export default function Home({ products }) {
   const [activeCategory, setActiveCategory] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState(''); // ✅ Pencarian
+  const [searchTerm, setSearchTerm] = useState('');
 
   // ✅ Kategori dengan Snack
   const categories = [
     { id: 'all', name: 'Semua' },
     { id: 'promo', name: 'Promo' },
     { id: 'makanan', name: 'Makanan' },
-    { id: 'snack', name: 'Snack' }, // ✅ Baru
+    { id: 'snack', name: 'Snack' },
     { id: 'minuman', name: 'Minuman' },
     { id: 'kebersihan', name: 'Kebersihan' },
     { id: 'perawatan', name: 'Perawatan' }
@@ -155,6 +154,7 @@ export default function Home({ products }) {
     }
   };
 
+  // 🔑 LOGIN ADMIN
   const handleAdminLogin = async (email, password) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
@@ -163,6 +163,22 @@ export default function Home({ products }) {
         router.push('/admin');
       } else {
         alert('Bukan akun admin!');
+        await signOut(auth);
+      }
+    } catch (err) {
+      alert('Login gagal: ' + err.message);
+    }
+  };
+
+  // 👨‍💻 LOGIN KASIR → ke /admin
+  const handleCashierLogin = async (email, password) => {
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      if (userDoc.exists() && userDoc.data().role === 'cashier') {
+        router.push('/admin'); // ✅ Kasir masuk ke /admin
+      } else {
+        alert('Bukan akun kasir!');
         await signOut(auth);
       }
     } catch (err) {
@@ -181,14 +197,11 @@ export default function Home({ products }) {
     window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(waMessage)}`, '_blank');
   };
 
-  // ✅ Filter: Kategori + Pencarian
   const getFilteredProducts = () => {
     let filtered = products;
-
     if (activeCategory !== 'all') {
       filtered = filtered.filter(p => p.category === activeCategory);
     }
-
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(p =>
@@ -197,7 +210,6 @@ export default function Home({ products }) {
         (p.barcode && p.barcode.includes(term))
       );
     }
-
     return filtered;
   };
 
@@ -216,6 +228,7 @@ export default function Home({ products }) {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showCartModal, setShowCartModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
+  const [showCashierModal, setShowCashierModal] = useState(false); // ✅ Tambahkan state
 
   return (
     <>
@@ -237,7 +250,7 @@ export default function Home({ products }) {
         `}</style>
       </Head>
 
-      {/* MODALS (tidak diubah) */}
+      {/* MODALS */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white p-6 rounded-lg w-full max-w-xs sm:max-w-md">
@@ -287,6 +300,33 @@ export default function Home({ products }) {
             </button>
             <button 
               onClick={() => setShowAdminModal(false)}
+              className="mt-2 w-full bg-gray-500 text-white py-2.5 rounded text-base"
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ MODAL LOGIN KASIR */}
+      {showCashierModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-6 rounded-lg w-full max-w-xs sm:max-w-md">
+            <h3 className="font-bold text-lg mb-4">👨‍💻 Login Kasir</h3>
+            <input id="cashierEmail" type="email" placeholder="Email Kasir" className="w-full p-2 border mb-3 text-base" />
+            <input id="cashierPassword" type="password" placeholder="Password" className="w-full p-2 border mb-3 text-base" />
+            <button 
+              onClick={() => {
+                const email = document.getElementById('cashierEmail').value;
+                const password = document.getElementById('cashierPassword').value;
+                if (email && password) handleCashierLogin(email, password);
+              }}
+              className="w-full bg-green-600 text-white py-2.5 rounded text-base"
+            >
+              Login Kasir
+            </button>
+            <button 
+              onClick={() => setShowCashierModal(false)}
               className="mt-2 w-full bg-gray-500 text-white py-2.5 rounded text-base"
             >
               Batal
@@ -357,6 +397,7 @@ export default function Home({ products }) {
                 {cart.reduce((sum, item) => sum + item.quantity, 0)}
               </span>
             </button>
+            {/* 🔒 Admin */}
             <button 
               onClick={() => setShowAdminModal(true)}
               className="text-red-600 hover:text-red-800 font-medium"
@@ -364,11 +405,20 @@ export default function Home({ products }) {
             >
               🔒
             </button>
+            {/* 👨‍💻 Kasir */}
+            <button 
+              onClick={() => setShowCashierModal(true)}
+              className="text-green-600 hover:text-green-800 font-medium ml-1"
+              title="Login Kasir"
+            >
+              👨‍💻
+            </button>
             {currentUser ? (
               <div className="flex items-center space-x-2">
                 <span className="hidden sm:inline text-sm font-medium">{currentUser.email}</span>
                 <span className="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded-full">
-                  {currentUser.role === 'pembeli' ? 'Pembeli' : 'Reseller'}
+                  {currentUser.role === 'pembeli' ? 'Pembeli' : 
+                   currentUser.role === 'reseller' ? 'Reseller' : 'Kasir'}
                 </span>
                 <button onClick={handleLogout} className="text-gray-500 hover:text-gray-700 text-base">
                   <i className="fas fa-sign-out-alt"></i>
@@ -385,6 +435,7 @@ export default function Home({ products }) {
           </div>
         </div>
 
+        {/* MOBILE MENU */}
         {isMenuOpen && (
           <div className="md:hidden bg-white py-3 px-4 shadow-lg border-t">
             <button 
@@ -404,6 +455,16 @@ export default function Home({ products }) {
               className="block w-full text-left py-2 text-base"
             >
               <i className="fas fa-lock mr-2"></i> Admin
+            </button>
+            {/* ✅ Tambahkan di mobile */}
+            <button 
+              onClick={() => {
+                setShowCashierModal(true);
+                setIsMenuOpen(false);
+              }}
+              className="block w-full text-left py-2 text-base"
+            >
+              <i className="fas fa-user-tie mr-2"></i> Kasir
             </button>
             {currentUser ? (
               <button 
@@ -472,7 +533,6 @@ export default function Home({ products }) {
       {/* CATEGORIES + SEARCH */}
       <section className="py-6 sm:py-8 bg-gray-100">
         <div className="container mx-auto px-4">
-          {/* ✅ PENCARIAN */}
           <div className="mb-4 max-w-2xl mx-auto">
             <div className="relative">
               <i className="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
