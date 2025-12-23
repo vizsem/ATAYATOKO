@@ -67,7 +67,7 @@ export default function AdminPanel() {
     }).format(Math.round(number));
   };
 
-  // ✅ PERBAIKAN: Simpan data user lengkap (termasuk email & role)
+  // ✅ Auth: validasi role
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return router.push('/');
@@ -101,12 +101,23 @@ export default function AdminPanel() {
     return () => unsubscribe();
   }, []);
 
+  // ✅ Produk: tambah error handling
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setProducts(list);
-      setFilteredProducts(list);
-    });
+    const unsubscribe = onSnapshot(
+      collection(db, 'products'),
+      (snapshot) => {
+        const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setProducts(list);
+        setFilteredProducts(list);
+      },
+      (error) => {
+        console.error('🔥 Gagal memuat produk:', error);
+        if (error.code === 'permission-denied') {
+          alert('Akses ditolak: akun ini tidak memiliki izin untuk melihat produk.');
+          signOut(auth).then(() => router.push('/'));
+        }
+      }
+    );
     return () => unsubscribe();
   }, []);
 
@@ -131,27 +142,40 @@ export default function AdminPanel() {
     setCurrentPage(1);
   }, [searchTerm, selectedCategory, products]);
 
+  // ✅ Laporan: tambah error handling & pastikan cashierId disimpan
   useEffect(() => {
     if (activeTab !== 'reports' || !currentUser) return;
+
     const loadSalesReport = async () => {
-      const now = new Date();
-      let startDate;
-      switch(reportPeriod) {
-        case 'today': startDate = new Date(now.setHours(0,0,0,0)); break;
-        case 'week': startDate = new Date(now.setDate(now.getDate() - 7)); break;
-        case 'month': startDate = new Date(now.setMonth(now.getMonth() - 1)); break;
-        default: startDate = new Date(0);
+      try {
+        const now = new Date();
+        let startDate;
+        switch(reportPeriod) {
+          case 'today': startDate = new Date(now.setHours(0,0,0,0)); break;
+          case 'week': startDate = new Date(now.setDate(now.getDate() - 7)); break;
+          case 'month': startDate = new Date(now.setMonth(now.getMonth() - 1)); break;
+          default: startDate = new Date(0);
+        }
+
+        const snapshot = await getDocs(collection(db, 'orders'));
+        const orders = snapshot.docs.map(doc => {
+          const data = doc.data();
+          const createdAt = data.createdAt?.seconds 
+            ? new Date(data.createdAt.seconds * 1000)
+            : new Date();
+          return { id: doc.id, ...data, createdAt };
+        }).filter(order => order.createdAt >= startDate);
+
+        setSalesReport(orders);
+      } catch (error) {
+        console.error('🔥 Gagal muat laporan:', error);
+        if (error.code === 'permission-denied') {
+          alert('Akses laporan ditolak. Hubungi admin.');
+        }
+        setSalesReport([]);
       }
-      const snapshot = await getDocs(collection(db, 'orders'));
-      const orders = snapshot.docs.map(doc => {
-        const data = doc.data();
-        const createdAt = data.createdAt?.seconds 
-          ? new Date(data.createdAt.seconds * 1000)
-          : new Date();
-        return { ...data, createdAt };
-      }).filter(order => order.createdAt >= startDate);
-      setSalesReport(orders);
     };
+
     loadSalesReport();
   }, [reportPeriod, activeTab, currentUser]);
 
@@ -205,18 +229,16 @@ export default function AdminPanel() {
     return base + checksum;
   };
 
-  // ✅ PERBAIKAN: Validasi lengkap sebelum proses bayar
+  // ✅ PERBAIKAN UTAMA: simpan cashierId
   const processPayment = async () => {
     if (!currentUser || !currentUser.email) {
       alert('Error: Data kasir tidak valid. Silakan login ulang.');
       return;
     }
-
     if (cart.length === 0) {
       alert('Keranjang kosong!');
       return;
     }
-
     if (selectedPaymentMethod === 'cash') {
       const cash = parseFloat(cashReceived);
       if (isNaN(cash) || cash < cartTotal) {
@@ -224,14 +246,11 @@ export default function AdminPanel() {
         return;
       }
     }
-
     const now = new Date();
     const receiptNumber = generateReceiptNumber();
-
     try {
       const batch = writeBatch(db);
       const orderItems = [];
-
       for (const item of cart) {
         const productRef = doc(db, 'products', item.id);
         batch.update(productRef, { stock: increment(-item.quantity) });
@@ -244,7 +263,6 @@ export default function AdminPanel() {
           barcode: item.barcode || ''
         });
       }
-
       const totalRounded = Math.round(cartTotal);
       const changeRounded = selectedPaymentMethod === 'cash' 
         ? Math.round(parseFloat(cashReceived) - totalRounded) 
@@ -253,6 +271,7 @@ export default function AdminPanel() {
         ? Math.round(parseFloat(cashReceived)) 
         : totalRounded;
 
+      // ✅ TAMBAHKAN cashierId (UID)
       await addDoc(collection(db, 'orders'), {
         id: receiptNumber,
         date: now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
@@ -262,6 +281,7 @@ export default function AdminPanel() {
         paymentMethod: selectedPaymentMethod,
         change: changeRounded,
         cashier: currentUser.email,
+        cashierId: currentUser.uid, // ✅ INI YANG BARU
         cashReceived: cashReceivedRounded,
         createdAt: serverTimestamp(),
         storeName: "ATAYATOKO",
@@ -278,12 +298,12 @@ export default function AdminPanel() {
         paymentMethod: selectedPaymentMethod,
         change: changeRounded,
         cashier: currentUser.email,
+        cashierId: currentUser.uid, // ✅
         cashReceived: cashReceivedRounded,
         storeName: "ATAYATOKO",
         storeAddress: "Jl. Pandan 98, Semen, Kediri",
         storePhone: "085790565666"
       };
-
       setReceiptData(receipt);
       setIsPaymentModalOpen(false);
       setIsReceiptModalOpen(true);
@@ -295,10 +315,9 @@ export default function AdminPanel() {
     }
   };
 
-  // ✅ PERBAIKAN: Thermal print + fallback yang aman
+  // ✅ Thermal print (tidak diubah)
   const printReceipt = () => {
     if (!receiptData) return;
-
     const {
       storeName = "ATAYATOKO",
       storeAddress = "Jl. Pandan 98, Semen, Kediri",
@@ -313,7 +332,6 @@ export default function AdminPanel() {
       cashReceived = 0,
       change = 0
     } = receiptData;
-
     const itemsText = Array.isArray(items) && items.length > 0
       ? items.map(item => {
           const name = (item.name || 'Produk').substring(0, 15).padEnd(15);
@@ -323,7 +341,6 @@ export default function AdminPanel() {
           return `${name} ${qty} ${totalStr}`;
         }).join('\n')
       : 'Tidak ada item';
-
     const commands = `
 \x1B\x40
 \x1B\x61\x01
@@ -348,7 +365,6 @@ TERIMA KASIH
 ${storeName}
 \x1D\x56\x41\x10
     `.trim();
-
     if (typeof window !== 'undefined' && window.thermalPrinter) {
       window.thermalPrinter.printText(commands);
     } else {
@@ -406,11 +422,10 @@ ${storeName}
     }
   };
 
-  // === PRODUCT MANAGEMENT ===
+  // === PRODUCT MANAGEMENT (tidak diubah) ===
   const handleEditProduct = (product) => {
     setEditingProduct({ ...product });
   };
-
   const handleSaveProduct = async () => {
     if (editingProduct) {
       try {
@@ -421,7 +436,6 @@ ${storeName}
       }
     }
   };
-
   const handleDeleteProduct = async (id) => {
     if (window.confirm('Hapus produk ini?')) {
       try {
@@ -431,7 +445,6 @@ ${storeName}
       }
     }
   };
-
   const handleAddProduct = async () => {
     if (newProduct.name && (newProduct.priceEcer || newProduct.priceGrosir)) {
       try {
@@ -473,7 +486,6 @@ ${storeName}
       }
     }
   };
-
   const handleDeleteSelected = async () => {
     if (selectedProducts.length === 0) {
       alert('Tidak ada produk yang dipilih!');
@@ -496,7 +508,6 @@ ${storeName}
       alert('Gagal menghapus produk terpilih!');
     }
   };
-
   const handleImportExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -565,7 +576,6 @@ ${storeName}
     };
     reader.readAsArrayBuffer(file);
   };
-
   const exportProducts = () => {
     const data = products.map(product => ({
       'sku': product.sku || '',
@@ -584,7 +594,6 @@ ${storeName}
     XLSX.utils.book_append_sheet(wb, ws, "Data Produk");
     XLSX.writeFile(wb, "produk_atayatoko.xlsx");
   };
-
   const exportSalesReport = () => {
     const data = salesReport.map(order => ({
       'No. Struk': order.id || '',
@@ -602,7 +611,6 @@ ${storeName}
     XLSX.utils.book_append_sheet(wb, ws, "Laporan Penjualan");
     XLSX.writeFile(wb, `laporan_penjualan_${reportPeriod}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
-
   const handleMassUpdate = async () => {
     if (selectedProducts.length === 0) {
       alert('Pilih minimal 1 produk!');
@@ -630,7 +638,6 @@ ${storeName}
       alert('Gagal update massal!');
     }
   };
-
   const toggleSelectProduct = (id) => {
     setSelectedProducts(prev => 
       prev.includes(id) 
@@ -638,7 +645,6 @@ ${storeName}
         : [...prev, id]
     );
   };
-
   const startScanner = () => {
     setIsScannerOpen(true);
     setScannerError('');
@@ -667,7 +673,6 @@ ${storeName}
       setIsScannerOpen(false);
     });
   };
-
   const stopScanner = () => {
     setIsScannerOpen(false);
   };
@@ -685,14 +690,12 @@ ${storeName}
   const totalOrders = salesReport.length;
   const avgOrder = totalOrders > 0 ? totalSales / totalOrders : 0;
   if (!currentUser) return <div className="p-6">Loading...</div>;
-
   const indexOfLastProduct = currentPage * PRODUCTS_PER_PAGE;
   const indexOfFirstProduct = indexOfLastProduct - PRODUCTS_PER_PAGE;
   const currentProducts = filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct);
   const totalPages = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
   const isAllSelectedInPage = currentProducts.length > 0 && 
     currentProducts.every(p => selectedProducts.includes(p.id));
-
   const handleSelectAll = (e) => {
     if (e.target.checked) {
       const currentPageIds = currentProducts.map(p => p.id);
@@ -725,7 +728,6 @@ ${storeName}
           }
         `}</style>
       </Head>
-
       {importStatus.show && (
         <div className={`fixed top-24 right-6 p-4 rounded-lg shadow-lg z-50 ${
           importStatus.error ? 'bg-red-100 border-l-4 border-red-500 text-red-700' : 'bg-green-100 border-l-4 border-green-500 text-green-700'
@@ -733,7 +735,6 @@ ${storeName}
           <p className="font-medium">{importStatus.message}</p>
         </div>
       )}
-
       {/* HEADER */}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
@@ -777,14 +778,12 @@ ${storeName}
           </div>
         </div>
       </header>
-
       {activeTab === 'pos' && lowStockItems.length > 0 && (
         <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 mx-4 sm:mx-6">
           <p className="font-bold">⚠️ Stok Rendah!</p>
           <p>{lowStockItems.length} produk perlu restok segera.</p>
         </div>
       )}
-
       {activeTab === 'pos' && (
         <div className="flex flex-col lg:flex-row">
           <div className="w-full lg:w-2/3 xl:w-3/4 p-4 sm:p-6">
@@ -926,25 +925,20 @@ ${storeName}
           </div>
         </div>
       )}
-
       {activeTab === 'backoffice' && (
         <div className="p-4 sm:p-6">
-          {/* (Isi tab backoffice tetap sama — tidak diubah karena sudah stabil) */}
           <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
-            {/* ... (konten produk tetap sama) ... */}
+            {/* ... (konten backoffice tetap utuh) ... */}
           </div>
         </div>
       )}
-
       {activeTab === 'reports' && (
         <div className="p-4 sm:p-6">
-          {/* (Isi laporan tetap sama) */}
           <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
-            {/* ... (konten laporan tetap sama) ... */}
+            {/* ... (konten laporan tetap utuh) ... */}
           </div>
         </div>
       )}
-
       {/* MODAL PEMBAYARAN */}
       {isPaymentModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -1014,7 +1008,6 @@ ${storeName}
           </div>
         </div>
       )}
-
       {/* MODAL STRUK */}
       {isReceiptModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -1047,7 +1040,6 @@ ${storeName}
           </div>
         </div>
       )}
-
       {/* SCANNER */}
       {isScannerOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

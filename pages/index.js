@@ -15,34 +15,47 @@ import {
   onAuthStateChanged,
   signOut
 } from 'firebase/auth';
-import { auth, db } from '../lib/firebase';
+import { auth, db } from '../lib/firebase'; // ✅ Ambil auth & db dari client SDK
+import admin from '../lib/firebaseAdmin';
 
-// 🔥 ISR: Ambil data di server, konversi Timestamp agar aman
+// ✅ Ambil data produk saat build (hanya di server)
 export async function getStaticProps() {
   try {
-    const snapshot = await getDocs(collection(db, 'products'));
-    const products = snapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
+    const db = admin.firestore();
+    const snapshot = await db.collection('products').get();
+
+    const products = [];
+    snapshot.forEach(doc => {
+      let data = doc.data();
+
+      // 🔁 Konversi semua Timestamp ke string ISO
+      Object.keys(data).forEach(key => {
+        if (data[key] && typeof data[key] === 'object' && data[key].toDate) {
+          data[key] = data[key].toDate().toISOString(); // atau .getTime() untuk angka
+        }
+      });
+
+      products.push({
         id: doc.id,
         ...data,
-        createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
-        updatedAt: data.updatedAt ? data.updatedAt.toDate().toISOString() : null,
-      };
+      });
     });
 
     return {
       props: { products },
-      revalidate: 300
+      revalidate: 300,
     };
-  } catch (error) {
-    console.error('ISR Error:', error);
-    return { props: { products: [] }, revalidate: 300 };
+  } catch (err) {
+    console.error('Gagal fetch products:', err);
+    return {
+      props: { products: [] },
+      revalidate: 300,
+    };
   }
 }
 
-// ✅ Terima products dari props
-export default function Home({ products }) {
+// ✅ Satu-satunya komponen Home
+export default function Home({ products = [] }) {
   const router = useRouter();
   const [cart, setCart] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -51,6 +64,11 @@ export default function Home({ products }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showCartModal, setShowCartModal] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [showCashierModal, setShowCashierModal] = useState(false);
 
   // ✅ Kategori dengan Snack
   const categories = [
@@ -176,7 +194,7 @@ export default function Home({ products }) {
       await signInWithEmailAndPassword(auth, email, password);
       const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
       if (userDoc.exists() && userDoc.data().role === 'cashier') {
-        router.push('/admin'); // ✅ Kasir masuk ke /admin
+        router.push('/admin');
       } else {
         alert('Bukan akun kasir!');
         await signOut(auth);
@@ -224,11 +242,6 @@ export default function Home({ products }) {
       .filter(p => p.category === categoryId)
       .slice(0, 5);
   };
-
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [showCartModal, setShowCartModal] = useState(false);
-  const [showAdminModal, setShowAdminModal] = useState(false);
-  const [showCashierModal, setShowCashierModal] = useState(false); // ✅ Tambahkan state
 
   return (
     <>
@@ -308,7 +321,6 @@ export default function Home({ products }) {
         </div>
       )}
 
-      {/* ✅ MODAL LOGIN KASIR */}
       {showCashierModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white p-6 rounded-lg w-full max-w-xs sm:max-w-md">
@@ -397,7 +409,6 @@ export default function Home({ products }) {
                 {cart.reduce((sum, item) => sum + item.quantity, 0)}
               </span>
             </button>
-            {/* 🔒 Admin */}
             <button 
               onClick={() => setShowAdminModal(true)}
               className="text-red-600 hover:text-red-800 font-medium"
@@ -405,7 +416,6 @@ export default function Home({ products }) {
             >
               🔒
             </button>
-            {/* 👨‍💻 Kasir */}
             <button 
               onClick={() => setShowCashierModal(true)}
               className="text-green-600 hover:text-green-800 font-medium ml-1"
@@ -435,7 +445,6 @@ export default function Home({ products }) {
           </div>
         </div>
 
-        {/* MOBILE MENU */}
         {isMenuOpen && (
           <div className="md:hidden bg-white py-3 px-4 shadow-lg border-t">
             <button 
@@ -456,7 +465,6 @@ export default function Home({ products }) {
             >
               <i className="fas fa-lock mr-2"></i> Admin
             </button>
-            {/* ✅ Tambahkan di mobile */}
             <button 
               onClick={() => {
                 setShowCashierModal(true);
